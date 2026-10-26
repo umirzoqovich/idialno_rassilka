@@ -939,20 +939,21 @@ def create_app():
     return app
 
 if __name__ == "__main__":
-    port = 5000
-    host = "127.0.0.1"
+    port = int(os.environ.get("PORT", 5000))
+    host = os.environ.get("HOST", "0.0.0.0")
     print("=" * 60)
     print(f"[*] Telegram Excel Rassilka Dashboard ishga tushdi!")
-    print(f"[*] Brauzeringizda oching: http://{host}:{port}")
+    print(f"[*] Server manzili: http://{host}:{port}")
     print("=" * 60)
 
-    def open_browser():
-        try:
-            webbrowser.open(f"http://{host}:{port}")
-        except Exception:
-            pass
-
-    threading.Timer(1.5, open_browser).start()
+    # Auto-open browser only on desktop machines
+    if sys.platform == "win32" or os.environ.get("DISPLAY"):
+        def open_browser():
+            try:
+                webbrowser.open(f"http://localhost:{port}")
+            except Exception:
+                pass
+        threading.Timer(1.5, open_browser).start()
 
     app = create_app()
     web.run_app(app, host=host, port=port)

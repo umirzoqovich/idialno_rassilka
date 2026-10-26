@@ -1,0 +1,33 @@
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Sensitive Telegram sessions & configs (DO NOT PUSH!)
+session/*.session
+session/*.session-journal
+config.json
+
+# User uploads & client data
+uploads/*
+!uploads/.gitkeep
+exports/*
+!exports/.gitkeep
+!exports/namuna_kontaktlar.xlsx
+
+# Editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
