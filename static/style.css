@@ -939,3 +939,318 @@ textarea.form-control {
 .mt-4 { margin-top: 16px; }
 .mb-2 { margin-bottom: 8px; }
 .mb-3 { margin-bottom: 12px; }
+
+/* ----------------- Responsive Mobile System ----------------- */
+
+/* Desktop defaults for tab switcher and labels */
+.mobile-tabs-container {
+  display: none;
+}
+.btn-label-mobile {
+  display: none;
+}
+.btn-label-desktop {
+  display: inline;
+}
+
+@keyframes pulseGlow {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+  70% { transform: scale(1.05); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.live-dot-badge {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+  animation: pulseGlow 1.8s infinite;
+}
+
+/* Tablet & Mobile Breakpoint (<= 991px) */
+@media (max-width: 991px) {
+  .navbar {
+    padding: 10px 0;
+  }
+  .nav-container {
+    padding: 0 16px;
+  }
+  .logo-desc {
+    display: none;
+  }
+  .logo-text h1 {
+    font-size: 1.1rem;
+  }
+  .logo-icon {
+    width: 36px;
+    height: 36px;
+  }
+  .logo-icon svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .btn-label-desktop {
+    display: none;
+  }
+  .btn-label-mobile {
+    display: inline;
+  }
+  .btn-shablon {
+    padding: 6px 10px;
+    font-size: 0.75rem;
+  }
+  .account-badge {
+    padding: 6px 12px;
+    font-size: 0.75rem;
+  }
+
+  .main-content {
+    padding: 12px 14px 40px;
+  }
+
+  /* Sticky Mobile Segmented Tab Bar */
+  .mobile-tabs-container {
+    display: block;
+    position: sticky;
+    top: 57px;
+    z-index: 40;
+    background: rgba(11, 15, 25, 0.94);
+    backdrop-filter: blur(16px);
+    margin: -12px -14px 14px -14px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .mobile-tabs {
+    display: flex;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-full);
+    padding: 4px;
+    gap: 4px;
+  }
+
+  .mobile-tab-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.825rem;
+    font-weight: 600;
+    font-family: inherit;
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .mobile-tab-btn.active {
+    background: var(--primary);
+    color: #fff;
+    box-shadow: 0 2px 10px rgba(59, 130, 246, 0.35);
+  }
+
+  .tab-svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .grid-container {
+    display: block;
+  }
+
+  /* Tab toggle visibility on mobile */
+  .config-col.mobile-hidden,
+  .monitor-col.mobile-hidden {
+    display: none !important;
+  }
+
+  /* Cards on mobile */
+  .card {
+    padding: 16px 14px;
+    border-radius: 14px;
+    margin-bottom: 14px;
+  }
+
+  .card-header {
+    margin-bottom: 14px;
+    gap: 10px;
+  }
+  .card-header h3 {
+    font-size: 0.975rem;
+  }
+  .step-num {
+    width: 28px;
+    height: 28px;
+    font-size: 0.8rem;
+  }
+
+  /* Prevent zoom on input focus for mobile browsers */
+  input.form-control,
+  select.form-control,
+  textarea.form-control {
+    font-size: 16px !important;
+  }
+
+  /* Settings and Column selectors */
+  .col-selectors,
+  .settings-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  /* Dynamic Tag Buttons on Mobile */
+  .tag-bar {
+    gap: 6px;
+  }
+  .tag-btn {
+    padding: 6px 12px;
+    font-size: 0.825rem;
+  }
+
+  /* Dropzone on Mobile */
+  .dropzone {
+    padding: 20px 14px;
+  }
+  .dropzone-icon {
+    width: 40px;
+    height: 40px;
+    margin-bottom: 8px;
+  }
+  .dropzone-text {
+    font-size: 0.85rem;
+  }
+
+  /* Monitor Header & Actions */
+  .monitor-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .monitor-header h2 {
+    font-size: 1.15rem;
+  }
+  .monitor-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    width: 100%;
+  }
+  .monitor-actions .btn {
+    width: 100%;
+    padding: 13px;
+    font-size: 0.95rem;
+  }
+
+  /* Stat Counters 2x2 on Mobile */
+  .stat-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .stat-card {
+    padding: 12px 10px;
+  }
+  .stat-num {
+    font-size: 1.35rem;
+  }
+  .stat-label {
+    font-size: 0.7rem;
+  }
+
+  /* Logs Card & Table on Mobile */
+  .flex-grow-card {
+    min-height: auto;
+  }
+  .logs-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .logs-actions {
+    width: 100%;
+  }
+  .logs-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .logs-table-wrap {
+    max-height: 420px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .logs-table {
+    min-width: 480px;
+    font-size: 0.775rem;
+  }
+  .logs-table th,
+  .logs-table td {
+    padding: 8px 10px;
+  }
+
+  /* Preview table */
+  .preview-table {
+    font-size: 0.75rem;
+  }
+  .preview-table th,
+  .preview-table td {
+    padding: 5px 8px;
+  }
+
+  /* Modal on Mobile */
+  .modal-backdrop {
+    padding: 12px;
+    align-items: flex-end;
+  }
+  .modal-content {
+    max-width: 100%;
+    border-radius: 20px 20px 14px 14px;
+    max-height: 88vh;
+    overflow-y: auto;
+  }
+  .modal-header {
+    padding: 16px 18px;
+  }
+  .modal-body {
+    padding: 18px 16px 28px;
+  }
+  .code-input {
+    font-size: 1.5rem !important;
+    letter-spacing: 0.25em;
+    padding: 12px;
+  }
+
+  /* Toast on Mobile */
+  .toast {
+    left: 14px;
+    right: 14px;
+    bottom: 14px;
+    font-size: 0.825rem;
+    justify-content: center;
+    text-align: center;
+  }
+}
+
+/* Small Smartphone Screen (< 400px) */
+@media (max-width: 400px) {
+  .logo-text h1 {
+    font-size: 0.95rem;
+  }
+  .nav-actions {
+    gap: 8px;
+  }
+  .account-badge {
+    padding: 5px 8px;
+    font-size: 0.7rem;
+  }
+  .mobile-tab-btn {
+    font-size: 0.75rem;
+    padding: 8px 6px;
+  }
+}
+

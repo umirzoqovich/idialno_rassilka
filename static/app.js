@@ -38,6 +38,16 @@ document.addEventListener('DOMContentLoaded', () => {
   setupDragAndDrop();
   connectWebSocket();
   setupMessageTime();
+  initMobileView();
+});
+
+window.addEventListener('resize', () => {
+  if (window.innerWidth > 991) {
+    const setupCol = document.getElementById('config-col');
+    const monitorCol = document.getElementById('monitor-col');
+    if (setupCol) setupCol.classList.remove('mobile-hidden');
+    if (monitorCol) monitorCol.classList.remove('mobile-hidden');
+  }
 });
 
 function setupMessageTime() {
@@ -573,6 +583,9 @@ async function startCampaign() {
     if (!data.ok) throw new Error(data.error);
 
     showToast("Rassilka boshlandi!", "success");
+    if (window.innerWidth <= 991) {
+      switchMobileTab('monitor');
+    }
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -650,6 +663,13 @@ function updateCampaignStatus(status, stats) {
     btnResume.classList.add('hidden');
     btnStop.classList.add('hidden');
     statusText.textContent = "Kutilmoqda. Excel fayl va xabarni kiriting.";
+  }
+
+  // Update mobile tab live indicator
+  const mobileLiveDot = document.getElementById('mobile-live-dot');
+  if (mobileLiveDot) {
+    if (status === 'running') mobileLiveDot.classList.remove('hidden');
+    else mobileLiveDot.classList.add('hidden');
   }
 }
 
@@ -730,4 +750,31 @@ function showToast(message, type = 'info') {
   setTimeout(() => {
     toast.classList.add('hidden');
   }, 4000);
+}
+
+// ----------------- Mobile Segmented Tab Switcher -----------------
+function switchMobileTab(tab) {
+  const setupCol = document.getElementById('config-col');
+  const monitorCol = document.getElementById('monitor-col');
+  const btnSetup = document.getElementById('tab-btn-setup');
+  const btnMonitor = document.getElementById('tab-btn-monitor');
+
+  if (tab === 'setup') {
+    if (btnSetup) btnSetup.classList.add('active');
+    if (btnMonitor) btnMonitor.classList.remove('active');
+    if (setupCol) setupCol.classList.remove('mobile-hidden');
+    if (monitorCol) monitorCol.classList.add('mobile-hidden');
+  } else {
+    if (btnMonitor) btnMonitor.classList.add('active');
+    if (btnSetup) btnSetup.classList.remove('active');
+    if (setupCol) setupCol.classList.add('mobile-hidden');
+    if (monitorCol) monitorCol.classList.remove('mobile-hidden');
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function initMobileView() {
+  if (window.innerWidth <= 991) {
+    switchMobileTab('setup');
+  }
 }
