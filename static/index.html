@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Telegram Excel Rassilka Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="navbar">
+    <div class="nav-container">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m22 2-7 20-4-9-9-4Z"/>
+            <path d="M22 2 11 13"/>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <h1>TeleSender <span>PRO</span></h1>
+          <p>Shaxsiy akkauntdan Excel orqali xabar yuborish</p>
+        </div>
+      </div>
+
+      <div class="nav-actions">
+        <a href="/api/excel/template" class="btn btn-outline" download id="download-template-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          Namunaviy Excel shablon
+        </a>
+
+        <!-- Account status capsule -->
+        <div id="account-badge" class="account-badge disconnected" onclick="openAuthModal()">
+          <span class="status-dot"></span>
+          <span id="account-name">Akkaunt ulanmagan</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-content">
+    <div class="grid-container">
+      
+      <!-- Left Column: Controls & Setup -->
+      <div class="config-col">
+
+        <!-- Step 1: Telegram Account Card -->
+        <div class="card" id="telegram-card">
+          <div class="card-header">
+            <div class="step-num">1</div>
+            <div>
+              <h3>Telegram Akkaunt</h3>
+              <p>Xabarlar yuboriladigan shaxsiy profilingiz</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="auth-connected-view" class="hidden">
+              <div class="profile-box">
+                <div class="avatar" id="user-avatar">TG</div>
+                <div class="user-meta">
+                  <div class="user-title" id="profile-full-name">Ali Valiyev</div>
+                  <div class="user-subtitle" id="profile-phone">+998 90 123 45 67</div>
+                  <div class="user-username" id="profile-username">@username</div>
+                </div>
+              </div>
+              <button class="btn btn-danger btn-sm w-full mt-3" onclick="logoutTelegram()">
+                Akkauntdan chiqish
+              </button>
+            </div>
+
+            <div id="auth-login-prompt">
+              <p class="text-muted text-sm mb-3">
+                Rassilka qilish uchun shaxsiy Telegram akkauntingizni ulang. Sessiya xavfsiz kompyuteringizda saqlanadi.
+              </p>
+              <button class="btn btn-primary w-full" onclick="openAuthModal()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+                  <polyline points="10 17 15 12 10 7"/>
+                  <line x1="15" y1="12" x2="3" y2="12"/>
+                </svg>
+                Telegram akkauntni ulash
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2: Excel File Upload Card -->
+        <div class="card">
+          <div class="card-header">
+            <div class="step-num">2</div>
+            <div>
+              <h3>Excel Faylni Yuklash</h3>
+              <p>Telefon raqamlar ro'yxati (.xlsx, .xls)</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <!-- Dropzone -->
+            <div class="dropzone" id="dropzone" onclick="document.getElementById('excel-input').click()">
+              <input type="file" id="excel-input" accept=".xlsx, .xls" style="display:none" onchange="handleExcelSelect(event)">
+              <div class="dropzone-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="12" y1="18" x2="12" y2="12"/>
+                  <line x1="9" y1="15" x2="12" y2="12"/>
+                  <line x1="15" y1="15" x2="12" y2="12"/>
+                </svg>
+              </div>
+              <p class="dropzone-text" id="dropzone-filename">Excel faylni bu yerga tashlang yoki bosing</p>
+              <span class="dropzone-hint">.xlsx yoki .xls format (Ustunlar avto-aniqlanadi)</span>
+            </div>
+
+            <!-- Upload summary & column mapping -->
+            <div id="excel-summary" class="hidden mt-4">
+              <div class="info-pill">
+                <span>Topilgan kontaktlar:</span>
+                <strong id="total-contacts-badge">0 ta</strong>
+              </div>
+
+              <div class="col-selectors mt-3">
+                <div class="form-group">
+                  <label class="form-label">Telefon ustuni:</label>
+                  <select id="phone-column-select" class="form-control" onchange="updateColumnMapping()"></select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Ism ustuni (ixtiyoriy):</label>
+                  <select id="name-column-select" class="form-control" onchange="updateColumnMapping()"></select>
+                </div>
+              </div>
+
+              <!-- Mini preview -->
+              <div class="preview-box mt-3">
+                <div class="preview-title">Dastlabki namunalar (birinchi 5 ta):</div>
+                <div class="table-responsive">
+                  <table class="preview-table" id="preview-table">
+                    <thead>
+                      <tr><th>#</th><th>Telefon</th><th>Ism</th></tr>
+                    </thead>
+                    <tbody id="preview-table-body"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: Message & Media Card -->
+        <div class="card">
+          <div class="card-header">
+            <div class="step-num">3</div>
+            <div>
+              <h3>Xabar Matni va Rasm</h3>
+              <p>Mijozlarga boradigan matn va ilova</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <!-- Dynamic tags -->
+            <div class="tag-bar">
+              <span class="text-xs text-muted">Taglar:</span>
+              <button type="button" class="tag-btn" onclick="insertTag('{ism}')">+ {ism}</button>
+              <button type="button" class="tag-btn" onclick="insertTag('{telefon}')">+ {telefon}</button>
+            </div>
+
+            <div class="form-group mt-2">
+              <textarea id="message-text" rows="5" class="form-control" placeholder="Assalomu alaykum {ism}! Siz uchun ajoyib taklifimiz bor..." oninput="updateMessagePreview()"></textarea>
+            </div>
+
+            <!-- Optional Media Attachment -->
+            <div class="media-upload-area mt-3">
+              <div class="media-row">
+                <label class="btn btn-outline btn-sm" onclick="document.getElementById('media-input').click()">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                    <polyline points="21 15 16 10 5 21"/>
+                  </svg>
+                  Rasm biriktirish (ixtiyoriy)
+                </label>
+                <input type="file" id="media-input" accept="image/*" style="display:none" onchange="handleMediaSelect(event)">
+                <span id="media-filename" class="text-xs text-muted">Rasm tanlanmagan</span>
+                <button id="media-remove-btn" class="btn btn-text text-danger hidden" onclick="removeMedia()">O'chirish</button>
+              </div>
+            </div>
+
+            <!-- Live message preview -->
+            <div class="mt-3">
+              <label class="form-label text-xs">Mijoz ko'radigan ko'rinish (Namunaviy):</label>
+              <div class="tg-bubble" id="tg-preview-bubble">
+                <div class="tg-bubble-text" id="tg-preview-text">Xabar matni kiritilmadi...</div>
+                <div class="tg-bubble-time" id="preview-time">12:00</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 4: Settings (Anti-ban delays) -->
+        <div class="card">
+          <div class="card-header">
+            <div class="step-num">4</div>
+            <div>
+              <h3>Xavfsizlik va Kutilma Sozlamalari</h3>
+              <p>Telegram spam-blokdan himoyalanish uchun</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="settings-grid">
+              <div class="form-group">
+                <label class="form-label">Minimal kutilma (soniya):</label>
+                <input type="number" id="min-delay" class="form-control" value="15" min="5" max="120">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Maksimal kutilma (soniya):</label>
+                <input type="number" id="max-delay" class="form-control" value="25" min="10" max="180">
+              </div>
+            </div>
+
+            <div class="form-group mt-3">
+              <label class="form-label">Limit (0 = barcha raqamlarga yuborish):</label>
+              <input type="number" id="max-limit" class="form-control" value="0" min="0" placeholder="0 - cheksiz">
+              <span class="text-xs text-muted">Sinov uchun masalan 5 yoki 10 qo'yishingiz mumkin</span>
+            </div>
+
+            <div class="form-check mt-3">
+              <input type="checkbox" id="clean-contacts-check" checked>
+              <label for="clean-contacts-check">
+                Xabar ketgach kontaktlar ro'yxatidan avtomatik tozalash (Tavsiya etiladi)
+              </label>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right Column: Live Campaign & Logs -->
+      <div class="monitor-col">
+
+        <!-- Top Action & Status Card -->
+        <div class="card monitor-card">
+          <div class="monitor-header">
+            <div>
+              <h2>Jonli Rassilka Monitoringi</h2>
+              <p id="monitor-status-text">Kutilmoqda. Excel fayl va matnni kiritib boshlang.</p>
+            </div>
+
+            <div class="monitor-actions">
+              <button id="btn-start" class="btn btn-success btn-lg" onclick="startCampaign()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                  <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+                Boshlash
+              </button>
+              <button id="btn-pause" class="btn btn-warning btn-lg hidden" onclick="pauseCampaign()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                  <rect x="6" y="4" width="4" height="16"/>
+                  <rect x="14" y="4" width="4" height="16"/>
+                </svg>
+                Pauza
+              </button>
+              <button id="btn-resume" class="btn btn-primary btn-lg hidden" onclick="resumeCampaign()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                  <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+                Davom ettirish
+              </button>
+              <button id="btn-stop" class="btn btn-danger btn-lg hidden" onclick="stopCampaign()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                </svg>
+                To'xtatish
+              </button>
+            </div>
+          </div>
+
+          <!-- Progress bar -->
+          <div class="progress-wrap mt-4">
+            <div class="progress-info">
+              <span id="progress-percent">0%</span>
+              <span id="progress-counts">0 / 0 ta</span>
+            </div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="progress-fill" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <!-- Stat Counters -->
+          <div class="stat-grid mt-4">
+            <div class="stat-card">
+              <div class="stat-num" id="stat-total">0</div>
+              <div class="stat-label">Jami raqamlar</div>
+            </div>
+            <div class="stat-card stat-success">
+              <div class="stat-num" id="stat-sent">0</div>
+              <div class="stat-label">Yuborildi</div>
+            </div>
+            <div class="stat-card stat-warning">
+              <div class="stat-num" id="stat-notfound">0</div>
+              <div class="stat-label">Telegrami yo'q</div>
+            </div>
+            <div class="stat-card stat-danger">
+              <div class="stat-num" id="stat-failed">0</div>
+              <div class="stat-label">Xatoliklar</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Logs & Results Card -->
+        <div class="card mt-4 flex-grow-card">
+          <div class="card-header logs-header">
+            <div>
+              <h3>Yuborish Jarayoni (Loglar)</h3>
+              <p>Har bir raqamning real vaqtdagi holati</p>
+            </div>
+            <div class="logs-actions">
+              <a href="/api/campaign/export" class="btn btn-outline btn-sm" id="btn-export-results" download>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Natijalarni Excelda yuklab olish
+              </a>
+            </div>
+          </div>
+
+          <div class="logs-table-wrap">
+            <table class="logs-table" id="logs-table">
+              <thead>
+                <tr>
+                  <th>Vaqt</th>
+                  <th>Telefon</th>
+                  <th>Ism</th>
+                  <th>Holati</th>
+                  <th>Tafsilot</th>
+                </tr>
+              </thead>
+              <tbody id="logs-table-body">
+                <tr class="empty-row">
+                  <td colspan="5" class="text-center text-muted">Hali xabar yuborish boshlanmadi. Yuqoridagi "Boshlash" tugmasini bosing.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- Telegram Authentication Modal -->
+  <div class="modal-backdrop hidden" id="auth-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="auth-modal-title">Telegram Akkauntni Ulash</h3>
+        <button class="close-btn" onclick="closeAuthModal()">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Auth Step 1: API ID, Hash, Phone -->
+        <div id="auth-step-1">
+          <div class="alert alert-info">
+            <strong>API ID va Hash qanday olinadi?</strong>
+            <p>1. <a href="https://my.telegram.org" target="_blank" class="link">my.telegram.org</a> ga kiring va telefoningiz bilan login qiling.</p>
+            <p>2. "API development tools" bo'limiga kirib ilova nomini yozing va ID/Hash ni oling.</p>
+          </div>
+
+          <div class="form-group mt-3">
+            <label class="form-label">API ID:</label>
+            <input type="text" id="auth-api-id" class="form-control" placeholder="Masalan: 12345678">
+          </div>
+
+          <div class="form-group mt-3">
+            <label class="form-label">API Hash:</label>
+            <input type="text" id="auth-api-hash" class="form-control" placeholder="Masalan: a1b2c3d4e5f6...">
+          </div>
+
+          <div class="form-group mt-3">
+            <label class="form-label">Telegram telefon raqamingiz:</label>
+            <input type="text" id="auth-phone" class="form-control" placeholder="+998901234567">
+          </div>
+
+          <div id="auth-error-1" class="text-danger text-sm mt-2 hidden"></div>
+
+          <button class="btn btn-primary w-full mt-4" id="btn-request-code" onclick="requestCode()">
+            Tasdiqlash kodini olish
+          </button>
+        </div>
+
+        <!-- Auth Step 2: Verification Code -->
+        <div id="auth-step-2" class="hidden">
+          <p class="text-muted text-sm mb-3">
+            Telegram ilovangizga (yoki SMS orqali) 5 xonali tasdiqlash kodi yuborildi. Uni kiriting:
+          </p>
+
+          <div class="form-group">
+            <label class="form-label">Tasdiqlash kodi:</label>
+            <input type="text" id="auth-code" class="form-control text-center code-input" placeholder="1 2 3 4 5" maxlength="10">
+          </div>
+
+          <div id="auth-error-2" class="text-danger text-sm mt-2 hidden"></div>
+
+          <button class="btn btn-primary w-full mt-4" id="btn-verify-code" onclick="verifyCode()">
+            Akkauntga kirish
+          </button>
+        </div>
+
+        <!-- Auth Step 3: 2FA Cloud Password -->
+        <div id="auth-step-3" class="hidden">
+          <p class="text-muted text-sm mb-3">
+            Akkauntingizda Ikki bosqichli autentifikatsiya (2FA Parol) yoqilgan. Parolni kiriting:
+          </p>
+
+          <div class="form-group">
+            <label class="form-label">Bulutli parol (Cloud Password):</label>
+            <input type="password" id="auth-password" class="form-control" placeholder="Parolingizni kiriting">
+          </div>
+
+          <div id="auth-error-3" class="text-danger text-sm mt-2 hidden"></div>
+
+          <button class="btn btn-primary w-full mt-4" id="btn-verify-password" onclick="verifyPassword()">
+            Kirishni yakunlash
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
