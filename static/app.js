@@ -447,7 +447,7 @@ function renderPreviewTable(previewRows) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${idx + 1}</td>
-      <td style="font-family:'JetBrains Mono', monospace; font-weight:600; color:#38bdf8;">${r.phone}</td>
+      <td style="font-family:'JetBrains Mono', monospace; font-weight:600; color:#34d399;">${r.phone}</td>
       <td>${r.name}</td>
     `;
     tbody.appendChild(tr);
@@ -726,7 +726,7 @@ function appendLog(entry, scroll = true) {
 
   tr.innerHTML = `
     <td style="font-family:'JetBrains Mono', monospace; font-size:0.75rem; color:#64748b;">${entry.time}</td>
-    <td style="font-family:'JetBrains Mono', monospace; font-weight:600; color:#38bdf8;">${entry.phone}</td>
+    <td style="font-family:'JetBrains Mono', monospace; font-weight:600; color:#34d399;">${entry.phone}</td>
     <td>${entry.name}</td>
     <td><span class="status-badge ${badgeClass}">${label}</span></td>
     <td style="font-size:0.8rem; color:#cbd5e1;">${entry.detail || '—'}</td>

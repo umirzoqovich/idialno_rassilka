@@ -613,7 +613,7 @@ def generate_sample_template():
         ["+998947778899", "Shahnoza", "BeautyLab", "Yangi"]
     ]
 
-    header_fill = PatternFill(start_color="3B82F6", end_color="3B82F6", fill_type="solid")
+    header_fill = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
     header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
     align_center = Alignment(horizontal="center", vertical="center")
 
