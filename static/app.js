@@ -477,8 +477,14 @@ async function quickGoogleLogin() {
       showToast("Diqqat: Ushbu domen Firebase Console -> Authentication -> Authorized Domains ga qo'shilishi kerak!", "error");
       return;
     }
-    if (err.code === 'auth/operation-not-allowed') {
-      showToast("Firebase Console -> Authentication da 'Google' provayderini yoqing!", "error");
+    if (err.code === 'auth/operation-not-allowed' || err.code === 'auth/configuration-not-found') {
+      const msg = "Firebase Console'da Authentication hali yoqilmagan! Firebase konsoliga kiring -> Authentication bo'limidan 'Get started' ni bosing va 'Google'ni yoqing.";
+      const errEl = document.getElementById('user-auth-error');
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.classList.remove('hidden');
+      }
+      showToast(msg, "error");
       return;
     }
 
