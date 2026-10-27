@@ -259,11 +259,28 @@ async function handleAuthSubmit(e) {
 }
 
 // ----------------- Firebase Google Authentication -----------------
+const DEFAULT_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyB8ZfLGqGprrilq-AP3ZzuQ2DESW_OCu4A",
+  authDomain: "idialno-rasilka.firebaseapp.com",
+  projectId: "idialno-rasilka",
+  storageBucket: "idialno-rasilka.firebasestorage.app",
+  messagingSenderId: "661702211662",
+  appId: "1:661702211662:web:5b4001b341bf1c29d4eb1f",
+  measurementId: "G-SVT2JTXSNQ"
+};
+
 let firebaseInitialized = false;
-let currentFirebaseConfig = null;
+let currentFirebaseConfig = DEFAULT_FIREBASE_CONFIG;
 
 async function initFirebase() {
   try {
+    // 1. Initialize immediately with embedded config if available
+    if (window.firebase && !firebase.apps.length && DEFAULT_FIREBASE_CONFIG.apiKey) {
+      firebase.initializeApp(DEFAULT_FIREBASE_CONFIG);
+      firebaseInitialized = true;
+    }
+
+    // 2. Fetch server-side updated config if exists
     const { res, data } = await safeFetchJson('/api/auth/firebase-config');
     if (res.ok && data.ok && data.config && data.config.apiKey) {
       currentFirebaseConfig = data.config;
@@ -271,11 +288,9 @@ async function initFirebase() {
         firebase.initializeApp(data.config);
       }
       firebaseInitialized = true;
-      const gBtnText = document.getElementById('google-btn-text');
-      if (gBtnText) gBtnText.textContent = "Google orqali kirish";
-    } else {
-      firebaseInitialized = false;
     }
+    const gBtnText = document.getElementById('google-btn-text');
+    if (gBtnText) gBtnText.textContent = "Google orqali kirish (1-bosish)";
   } catch (e) {
     console.warn("Firebase config yuklanmadi:", e);
   }
