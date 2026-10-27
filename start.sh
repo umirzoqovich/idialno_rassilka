@@ -15,10 +15,11 @@ fi
 if [ ! -d ".venv" ]; then
     echo "[!] Virtual muhit (.venv) yaratilmoqda..."
     python3 -m venv .venv
-    echo "[!] Kutubxonalar o'rnatilmoqda..."
-    .venv/bin/pip install --upgrade pip
-    .venv/bin/pip install -r requirements.txt
 fi
+
+# Always ensure requirements (aiosqlite, etc.) are installed
+echo "[!] Kutubxonalar tekshirilmoqda va yangilanmoqda..."
+.venv/bin/pip install -r requirements.txt
 
 echo "[✓] Server ishga tushirilmoqda..."
 echo "[✓] Tashqaridan kirish uchun brauzerda oching: http://SERVER_IP:5000"

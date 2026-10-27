@@ -58,18 +58,38 @@ function setupMessageTime() {
   if (el) el.textContent = timeStr;
 }
 
+// ----------------- Safe JSON Fetch Helper -----------------
+async function safeFetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    if (res.status === 502) {
+      throw new Error("Server xatosi: 502 Bad Gateway. Serverda Python app.py ishga tushmagan yoki kutubxona yetishmaydi.");
+    } else if (res.status === 504) {
+      throw new Error("Server xatosi: 504 Gateway Timeout. Server javob bermayapti.");
+    } else if (res.status === 404) {
+      throw new Error("Server xatosi: 404 Not Found. API manzili topilmadi.");
+    } else if (res.status >= 500) {
+      throw new Error(`Server xatosi (${res.status}): Server loglarini tekshiring.`);
+    } else {
+      throw new Error(`Server noaniq javob qaytardi (${res.status}): ${text.substring(0, 80)}`);
+    }
+  }
+  return { res, data };
+}
+
 // ----------------- User Auth & SaaS Management -----------------
 async function checkUserAuth() {
   try {
-    const res = await fetch('/api/auth/me');
-    if (res.ok) {
-      const data = await res.json();
-      if (data.ok && data.user) {
-        setUserLoggedIn(data.user);
-        initApp();
-        connectWebSocket();
-        return;
-      }
+    const { res, data } = await safeFetchJson('/api/auth/me');
+    if (res.ok && data && data.ok && data.user) {
+      setUserLoggedIn(data.user);
+      initApp();
+      connectWebSocket();
+      return;
     }
     setUserLoggedOut();
     openUserAuthModal();
@@ -209,12 +229,11 @@ async function handleAuthSubmit(e) {
   const payload = isRegister ? { email, password, full_name: fullName } : { email, password };
 
   try {
-    const res = await fetch(url, {
+    const { res, data } = await safeFetchJson(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    const data = await res.json();
 
     if (!res.ok || !data.ok) {
       throw new Error(data.error || "Xatolik yuz berdi");
@@ -250,12 +269,11 @@ async function quickGoogleLogin() {
   const fullName = email.split('@')[0].replace(/[._]/g, ' ').toUpperCase();
 
   try {
-    const res = await fetch('/api/auth/google', {
+    const { res, data } = await safeFetchJson('/api/auth/google', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: email, full_name: fullName, avatar: '' })
     });
-    const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "Google orqali kirishda xato");
 
     showToast("Google orqali muvaffaqiyatli kirdingiz!", "success");
@@ -287,13 +305,12 @@ async function logoutUser() {
 // ----------------- Fetch Initial User Dashboard Status -----------------
 async function initApp() {
   try {
-    const res = await fetch('/api/status');
+    const { res, data } = await safeFetchJson('/api/status');
     if (res.status === 401) {
       setUserLoggedOut();
       openUserAuthModal();
       return;
     }
-    const data = await res.json();
 
     if (data.config) {
       if (data.config.api_id) document.getElementById('auth-api-id').value = data.config.api_id;
