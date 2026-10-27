@@ -690,6 +690,7 @@ async def auth_middleware(request, handler):
         "/api/auth/login",
         "/api/auth/register",
         "/api/auth/google",
+        "/api/auth/firebase-config",
         "/api/excel/template",
     ]
 
@@ -842,6 +843,39 @@ async def handle_user_me(request):
             "avatar": user["avatar"]
         }
     })
+
+FIREBASE_CONFIG_PATH = DATA_DIR / "firebase_config.json"
+
+async def handle_get_firebase_config(request):
+    config = None
+    if FIREBASE_CONFIG_PATH.exists():
+        try:
+            with open(FIREBASE_CONFIG_PATH, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except Exception:
+            pass
+    if not config and os.environ.get("FIREBASE_CONFIG"):
+        try:
+            config = json.loads(os.environ["FIREBASE_CONFIG"])
+        except Exception:
+            pass
+    return web.json_response({"ok": True, "config": config})
+
+async def handle_save_firebase_config(request):
+    try:
+        data = await request.json()
+        config = data.get("config", {})
+        if not isinstance(config, dict) or not config.get("apiKey"):
+            return web.json_response({"ok": False, "error": "apiKey topilmadi yoki noto'g'ri Firebase config!"}, status=400)
+
+        FIREBASE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(FIREBASE_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+
+        return web.json_response({"ok": True, "message": "Firebase sozlamalari muvaffaqiyatli saqlandi!"})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": f"Xatolik: {str(e)}"}, status=500)
+
 
 # ----------------- Status & Settings (Per User) -----------------
 async def handle_get_status(request):
@@ -1210,6 +1244,8 @@ def create_app():
     app.router.add_post("/api/auth/google", handle_google_auth)
     app.router.add_post("/api/auth/logout", handle_user_logout)
     app.router.add_get("/api/auth/me", handle_user_me)
+    app.router.add_get("/api/auth/firebase-config", handle_get_firebase_config)
+    app.router.add_post("/api/auth/firebase-config", handle_save_firebase_config)
 
     # Telegram Account routes
     app.router.add_post("/api/auth/send_code", handle_auth_send_code)

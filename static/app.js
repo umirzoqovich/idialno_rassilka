@@ -37,6 +37,7 @@ let ws = null;
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
   checkUserAuth();
+  initFirebase();
   setupDragAndDrop();
   setupMessageTime();
   initMobileView();
@@ -257,36 +258,224 @@ async function handleAuthSubmit(e) {
   }
 }
 
-async function quickGoogleLogin() {
-  const emailInput = document.getElementById('auth-email');
-  let email = emailInput ? emailInput.value.trim() : '';
-  
-  if (!email || !email.includes('@')) {
-    email = prompt("Google / Gmail pochtangizni kiriting:", "foydalanuvchi@gmail.com");
-  }
-  if (!email) return;
+// ----------------- Firebase Google Authentication -----------------
+let firebaseInitialized = false;
+let currentFirebaseConfig = null;
 
-  const fullName = email.split('@')[0].replace(/[._]/g, ' ').toUpperCase();
+async function initFirebase() {
+  try {
+    const { res, data } = await safeFetchJson('/api/auth/firebase-config');
+    if (res.ok && data.ok && data.config && data.config.apiKey) {
+      currentFirebaseConfig = data.config;
+      if (window.firebase && !firebase.apps.length) {
+        firebase.initializeApp(data.config);
+      }
+      firebaseInitialized = true;
+      const gBtnText = document.getElementById('google-btn-text');
+      if (gBtnText) gBtnText.textContent = "Google orqali kirish";
+    } else {
+      firebaseInitialized = false;
+    }
+  } catch (e) {
+    console.warn("Firebase config yuklanmadi:", e);
+  }
+}
+
+function openFirebaseConfigModal() {
+  const modal = document.getElementById('firebase-config-modal');
+  if (modal) {
+    modal.classList.remove('hidden');
+    const input = document.getElementById('firebase-config-input');
+    if (input && currentFirebaseConfig) {
+      input.value = JSON.stringify(currentFirebaseConfig, null, 2);
+    }
+    const errEl = document.getElementById('firebase-config-error');
+    const succEl = document.getElementById('firebase-config-success');
+    if (errEl) errEl.classList.add('hidden');
+    if (succEl) succEl.classList.add('hidden');
+  }
+}
+
+function closeFirebaseConfigModal() {
+  const modal = document.getElementById('firebase-config-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function parseFirebaseSnippet(rawText) {
+  rawText = (rawText || '').trim();
+  if (!rawText) return null;
+
+  // 1. Direct JSON parse
+  try {
+    const parsed = JSON.parse(rawText);
+    if (parsed && typeof parsed === 'object' && parsed.apiKey) {
+      return parsed;
+    }
+  } catch (e) {}
+
+  // 2. Regex parser for JS config snippet
+  const extract = (key) => {
+    const m = rawText.match(new RegExp(`${key}\\s*:\\s*["']([^"']+)["']`, 'i'));
+    return m ? m[1].trim() : '';
+  };
+
+  const apiKey = extract('apiKey');
+  const authDomain = extract('authDomain');
+  const projectId = extract('projectId');
+  const storageBucket = extract('storageBucket');
+  const messagingSenderId = extract('messagingSenderId');
+  const appId = extract('appId');
+  const measurementId = extract('measurementId');
+
+  if (apiKey && (projectId || authDomain)) {
+    const cfg = { apiKey, authDomain, projectId };
+    if (storageBucket) cfg.storageBucket = storageBucket;
+    if (messagingSenderId) cfg.messagingSenderId = messagingSenderId;
+    if (appId) cfg.appId = appId;
+    if (measurementId) cfg.measurementId = measurementId;
+    return cfg;
+  }
+
+  return null;
+}
+
+async function saveFirebaseConfigFromModal() {
+  const input = document.getElementById('firebase-config-input');
+  const errEl = document.getElementById('firebase-config-error');
+  const succEl = document.getElementById('firebase-config-success');
+  const btn = document.getElementById('btn-save-firebase-config');
+
+  if (errEl) errEl.classList.add('hidden');
+  if (succEl) succEl.classList.add('hidden');
+
+  const raw = input ? input.value : '';
+  const parsed = parseFirebaseSnippet(raw);
+
+  if (!parsed || !parsed.apiKey) {
+    if (errEl) {
+      errEl.textContent = "Noto'g'ri config! Firebase'dan olingan kodni (apiKey, authDomain, projectId) to'liq kiriting.";
+      errEl.classList.remove('hidden');
+    }
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Saqlanmoqda...";
 
   try {
+    const { res, data } = await safeFetchJson('/api/auth/firebase-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: parsed })
+    });
+
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Firebase sozlamalarini saqlab bo'lmadi");
+    }
+
+    currentFirebaseConfig = parsed;
+    if (window.firebase) {
+      if (!firebase.apps.length) {
+        firebase.initializeApp(parsed);
+      }
+      firebaseInitialized = true;
+    }
+
+    if (succEl) {
+      succEl.textContent = "Sozlandi! Google oynasi ochilmoqda...";
+      succEl.classList.remove('hidden');
+    }
+
+    setTimeout(() => {
+      closeFirebaseConfigModal();
+      quickGoogleLogin();
+    }, 700);
+  } catch (err) {
+    if (errEl) {
+      errEl.textContent = err.message;
+      errEl.classList.remove('hidden');
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Saqlash va Google bilan Kirish";
+  }
+}
+
+async function quickGoogleLogin() {
+  if (!window.firebase) {
+    showToast("Firebase kutubxonasi yuklanmadi, internetni tekshiring", "error");
+    return;
+  }
+
+  if (!firebaseInitialized || !firebase.apps.length) {
+    openFirebaseConfigModal();
+    return;
+  }
+
+  const btn = document.getElementById('btn-google-login');
+  const btnText = document.getElementById('google-btn-text');
+  if (btn) btn.disabled = true;
+  if (btnText) btnText.textContent = "Google oynasi ochilmoqda...";
+
+  try {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+
+    // Official Google Sign-In Popup window!
+    const result = await firebase.auth().signInWithPopup(provider);
+    const gUser = result.user;
+    if (!gUser || !gUser.email) {
+      throw new Error("Google hisobidan ma'lumot olinmadi!");
+    }
+
+    if (btnText) btnText.textContent = "Avtorizatsiya qilinmoqda...";
+
+    const idToken = await gUser.getIdToken();
+    const payload = {
+      email: gUser.email,
+      full_name: gUser.displayName || gUser.email.split('@')[0],
+      avatar: gUser.photoURL || '',
+      credential: idToken
+    };
+
     const { res, data } = await safeFetchJson('/api/auth/google', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email, full_name: fullName, avatar: '' })
+      body: JSON.stringify(payload)
     });
-    if (!res.ok || !data.ok) throw new Error(data.error || "Google orqali kirishda xato");
 
-    showToast("Google orqali muvaffaqiyatli kirdingiz!", "success");
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Google orqali tizimga kirib bo'lmadi");
+    }
+
+    showToast(`Xush kelibsiz, ${data.user.full_name || data.user.email}!`, "success");
     setUserLoggedIn(data.user);
     initApp();
     connectWebSocket();
   } catch (err) {
+    console.error("Firebase Google Sign-in error:", err);
+    if (err.code === 'auth/popup-closed-by-user') {
+      showToast("Google oynasi yopildi", "info");
+      return;
+    }
+    if (err.code === 'auth/unauthorized-domain') {
+      showToast("Diqqat: Ushbu domen Firebase Console -> Authentication -> Authorized Domains ga qo'shilishi kerak!", "error");
+      return;
+    }
+    if (err.code === 'auth/operation-not-allowed') {
+      showToast("Firebase Console -> Authentication da 'Google' provayderini yoqing!", "error");
+      return;
+    }
+
     const errEl = document.getElementById('user-auth-error');
     if (errEl) {
       errEl.textContent = err.message;
       errEl.classList.remove('hidden');
     }
-    showToast(err.message, "error");
+    showToast(err.message || "Google orqali kirishda xato yuz berdi", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+    if (btnText) btnText.textContent = "Google orqali kirish";
   }
 }
 
