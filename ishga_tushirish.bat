@@ -11,8 +11,8 @@ echo Tizim tekshirilmoqda...
 if not exist ".venv\Scripts\python.exe" (
     echo [!] Virtual muhit (.venv) yaratilmoqda...
     py -m venv .venv
-    .venv\Scripts\pip install -r requirements.txt
 )
+.venv\Scripts\pip install -q -r requirements.txt
 
 echo [✓] Dastur ishga tushirilmoqda...
 echo [✓] Brauzeringiz avtomatik ochiladi: http://127.0.0.1:5000
