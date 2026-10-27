@@ -13,7 +13,14 @@ __pycache__/
 # Sensitive Telegram sessions & configs (DO NOT PUSH!)
 session/*.session
 session/*.session-journal
+session/user_*
 config.json
+
+# Database
+data/*.db
+data/*.db-wal
+data/*.db-shm
+!data/.gitkeep
 
 # User uploads & client data
 uploads/*
@@ -31,3 +38,7 @@ exports/*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Tunnel binary
+cloudflared.exe
+

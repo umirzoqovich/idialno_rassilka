@@ -8,10 +8,10 @@ services:
     ports:
       - "5000:5000"
     volumes:
+      - ./data:/app/data
       - ./session:/app/session
       - ./uploads:/app/uploads
       - ./exports:/app/exports
-      - ./config.json:/app/config.json
     environment:
       - HOST=0.0.0.0
       - PORT=5000

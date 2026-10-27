@@ -26,40 +26,41 @@ from telethon import TelegramClient, errors
 from telethon.tl.functions.contacts import ImportContactsRequest, DeleteContactsRequest
 from telethon.tl.types import InputPhoneContact
 
+import database
+
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 UPLOADS_DIR = BASE_DIR / "uploads"
 EXPORTS_DIR = BASE_DIR / "exports"
 SESSION_DIR = BASE_DIR / "session"
-CONFIG_FILE = BASE_DIR / "config.json"
+DATA_DIR = BASE_DIR / "data"
 
-for d in [STATIC_DIR, UPLOADS_DIR, EXPORTS_DIR, SESSION_DIR]:
+for d in [STATIC_DIR, UPLOADS_DIR, EXPORTS_DIR, SESSION_DIR, DATA_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-# ----------------- Configuration Management -----------------
-def load_config():
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
-        "api_id": "",
-        "api_hash": "",
-        "phone": "",
-        "min_delay": 15,
-        "max_delay": 30,
-        "auto_clean_contacts": True,
-        "max_limit": 0
-    }
+# Standard official Telegram API credentials (fallback for seamless 1-click connect)
+DEFAULT_API_ID = "2040"
+DEFAULT_API_HASH = "b18441a1ff607e10a989891a5462e627"
 
-def save_config(data):
-    current = load_config()
-    current.update(data)
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(current, f, indent=2, ensure_ascii=False)
-    return current
+# ----------------- WebSocket Hub (Per-User) -----------------
+user_ws_connections: dict[int, set[web.WebSocketResponse]] = {}
+
+async def broadcast_user_ws(user_id: int, event_type: str, data: dict):
+    sockets = user_ws_connections.get(user_id, set()).copy()
+    if not sockets:
+        return
+    payload = json.dumps({"type": event_type, "data": data}, ensure_ascii=False)
+    dead = set()
+    for ws in sockets:
+        try:
+            if not ws.closed:
+                await ws.send_str(payload)
+            else:
+                dead.add(ws)
+        except Exception:
+            dead.add(ws)
+    if dead and user_id in user_ws_connections:
+        user_ws_connections[user_id].difference_update(dead)
 
 # ----------------- Phone Number Cleaner -----------------
 def clean_phone_number(val):
@@ -136,7 +137,6 @@ def parse_excel_file(file_path):
     if phone_col_idx is None:
         phone_col_idx = 0  # default to first column
 
-    # Collect parsed contacts
     contacts = []
     preview_rows = []
 
@@ -184,15 +184,16 @@ def parse_excel_file(file_path):
         "contacts": contacts
     }
 
-# ----------------- Telegram Client State -----------------
-class TelegramManager:
-    def __init__(self):
+# ----------------- Per-User Telegram Manager -----------------
+class UserTelegramManager:
+    def __init__(self, user_id: int):
+        self.user_id = user_id
         self.client = None
         self.api_id = None
         self.api_hash = None
         self.phone = None
         self.phone_code_hash = None
-        self.session_path = str(SESSION_DIR / "user_session")
+        self.session_path = str(SESSION_DIR / f"user_{user_id}")
         self.is_connected = False
         self.is_authorized = False
         self.user_info = None
@@ -223,6 +224,21 @@ class TelegramManager:
         else:
             self.user_info = None
         return self.is_authorized
+
+    async def check_auth(self):
+        if self.client and self.client.is_connected():
+            self.is_authorized = await self.client.is_user_authorized()
+            if self.is_authorized:
+                me = await self.client.get_me()
+                self.user_info = {
+                    "id": me.id,
+                    "first_name": me.first_name or "",
+                    "last_name": me.last_name or "",
+                    "username": me.username or "",
+                    "phone": me.phone or ""
+                }
+            return self.is_authorized
+        return False
 
     async def request_code(self, phone):
         if not self.client or not self.client.is_connected():
@@ -279,19 +295,25 @@ class TelegramManager:
         self.is_connected = False
         self.is_authorized = False
         self.user_info = None
-        # remove session files
-        for f in SESSION_DIR.glob("user_session.*"):
+        # remove user session files
+        for f in SESSION_DIR.glob(f"user_{self.user_id}.*"):
             try:
                 f.unlink()
             except Exception:
                 pass
         return True
 
-telegram_mgr = TelegramManager()
+telegram_managers: dict[int, UserTelegramManager] = {}
 
-# ----------------- Campaign Manager -----------------
-class CampaignManager:
-    def __init__(self):
+def get_user_telegram_mgr(user_id: int) -> UserTelegramManager:
+    if user_id not in telegram_managers:
+        telegram_managers[user_id] = UserTelegramManager(user_id)
+    return telegram_managers[user_id]
+
+# ----------------- Per-User Campaign Manager -----------------
+class UserCampaignManager:
+    def __init__(self, user_id: int):
+        self.user_id = user_id
         self.status = "idle"  # idle, running, paused, stopped, completed
         self.task = None
         self.pause_event = asyncio.Event()
@@ -304,110 +326,101 @@ class CampaignManager:
         self.max_delay = 30
         self.auto_clean_contacts = True
         self.max_limit = 0
-
+        
         self.stats = {
             "total": 0,
             "processed": 0,
             "sent": 0,
             "not_found": 0,
             "failed": 0,
+            "current_status_text": "Kutilmoqda",
             "start_time": None,
-            "end_time": None,
-            "current_status_text": "Kutilmoqda"
+            "end_time": None
         }
         self.logs = []
         self.results = []
-        self.ws_clients = set()
+        self.last_export_file = None
+        self.last_export_filename = None
 
     def reset(self):
         self.status = "idle"
+        self.task = None
         self.pause_event.set()
+        self.contacts = []
+        self.message_template = ""
+        self.media_path = None
         self.stats = {
             "total": 0,
             "processed": 0,
             "sent": 0,
             "not_found": 0,
             "failed": 0,
+            "current_status_text": "Kutilmoqda",
             "start_time": None,
-            "end_time": None,
-            "current_status_text": "Tayyor"
+            "end_time": None
         }
         self.logs = []
         self.results = []
 
-    async def broadcast_ws(self, msg_type, data):
-        if not self.ws_clients:
-            return
-        payload = json.dumps({"type": msg_type, "data": data}, ensure_ascii=False)
-        disconnected = set()
-        for ws in self.ws_clients:
-            try:
-                await ws.send_str(payload)
-            except Exception:
-                disconnected.add(ws)
-        self.ws_clients -= disconnected
-
-    def add_log(self, phone, name, status, detail=""):
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        entry = {
+    def add_log(self, phone, name, status, message):
+        log_entry = {
             "id": len(self.logs) + 1,
-            "time": timestamp,
+            "time": datetime.datetime.now().strftime("%H:%M:%S"),
             "phone": phone,
             "name": name or "—",
-            "status": status,  # "sent", "not_found", "failed", "info", "warning"
-            "detail": detail
+            "status": status,  # sent, not_found, failed, info, warning
+            "message": message
         }
-        self.logs.append(entry)
-        asyncio.create_task(self.broadcast_ws("log", entry))
-        return entry
+        self.logs.append(log_entry)
+        # Asynchronously send log to user's WebSocket
+        asyncio.create_task(broadcast_user_ws(self.user_id, "new_log", {"log": log_entry, "stats": self.stats}))
 
     async def run(self):
+        tg_mgr = get_user_telegram_mgr(self.user_id)
+        if not tg_mgr.client or not tg_mgr.is_authorized:
+            self.status = "stopped"
+            self.add_log("Tizim", "Tizim", "failed", "Telegram akkaunt ulanmagan!")
+            await broadcast_user_ws(self.user_id, "status_change", {"status": self.status, "stats": self.stats})
+            return
+
         self.status = "running"
         self.stats["start_time"] = datetime.datetime.now().isoformat()
-        self.stats["current_status_text"] = "Yuborilmoqda..."
-        await self.broadcast_ws("status_change", {"status": self.status, "stats": self.stats})
-
+        
         to_process = self.contacts
-        if self.max_limit > 0:
+        if self.max_limit > 0 and self.max_limit < len(to_process):
             to_process = to_process[:self.max_limit]
-        self.stats["total"] = len(to_process)
 
-        self.add_log("Tizim", "Tizim", "info", f"Rassilka boshlandi. Jami: {len(to_process)} ta raqam.")
+        self.stats["total"] = len(to_process)
+        self.stats["processed"] = 0
+        self.stats["sent"] = 0
+        self.stats["not_found"] = 0
+        self.stats["failed"] = 0
+        self.stats["current_status_text"] = "Rassilka boshlandi..."
+
+        await broadcast_user_ws(self.user_id, "status_change", {"status": "running", "stats": self.stats})
+        self.add_log("Tizim", "Tizim", "info", f"Rassilka boshlandi. Jami: {len(to_process)} ta mijoz.")
 
         for idx, contact in enumerate(to_process):
-            # Check for stop
             if self.status == "stopped":
-                self.add_log("Tizim", "Tizim", "warning", "Rassilka foydalanuvchi tomonidan to'xtatildi.")
                 break
 
-            # Check for pause
-            if not self.pause_event.is_set():
-                self.stats["current_status_text"] = "Vaqtincha to'xtatilgan (Pauza)"
-                await self.broadcast_ws("status_change", {"status": self.status, "stats": self.stats})
-                self.add_log("Tizim", "Tizim", "warning", "Rassilka pauza qilindi. Davom etish kutilmoqda...")
-                await self.pause_event.wait()
-                if self.status == "stopped":
-                    break
-                self.stats["current_status_text"] = "Yuborilmoqda..."
-                await self.broadcast_ws("status_change", {"status": self.status, "stats": self.stats})
-                self.add_log("Tizim", "Tizim", "info", "Rassilka davom ettirilmoqda.")
+            await self.pause_event.wait()
+            if self.status == "stopped":
+                break
 
             phone = contact["phone"]
-            name = contact["name"]
+            name = contact.get("name", "")
             extra = contact.get("extra", {})
 
-            # Personalize message
+            # Prepare personalized message
             msg = self.message_template
-            # standard placeholders
             msg = msg.replace("{ism}", name or "").replace("{name}", name or "")
             msg = msg.replace("{telefon}", phone).replace("{phone}", phone)
-            # extra column placeholders
             for k, v in extra.items():
                 msg = msg.replace(f"{{{k}}}", str(v))
 
-            # Send via Telegram
-            client = telegram_mgr.client
-            if not client or not telegram_mgr.is_authorized:
+            client = tg_mgr.client
+            if not client or not tg_mgr.is_authorized:
                 self.add_log("Tizim", "Tizim", "failed", "Telegram akkaunt uzildi!")
                 self.status = "stopped"
                 break
@@ -421,20 +434,17 @@ class CampaignManager:
             }
 
             try:
-                # Add contact to Telegram to resolve user entity
                 first_n = name if name else "Mijoz"
                 input_contact = InputPhoneContact(client_id=random.randint(1000, 99999), phone=phone, first_name=first_n, last_name="")
                 import_res = await client(ImportContactsRequest([input_contact]))
 
                 if not import_res.users:
-                    # User not found on telegram
                     self.stats["not_found"] += 1
                     result_entry["status"] = "not_found"
                     result_entry["detail"] = "Telegramda ro'yxatdan o'tmagan"
                     self.add_log(phone, name, "not_found", "Telegram topilmadi")
                 else:
                     target_user = import_res.users[0]
-                    # Send media if present
                     if self.media_path and os.path.exists(self.media_path):
                         await client.send_file(target_user, self.media_path, caption=msg)
                     else:
@@ -445,7 +455,6 @@ class CampaignManager:
                     result_entry["detail"] = "Xabar muvaffaqiyatli yuborildi"
                     self.add_log(phone, name, "sent", "Xabar yuborildi")
 
-                    # Clean contact if enabled
                     if self.auto_clean_contacts:
                         try:
                             await client(DeleteContactsRequest(id=[target_user.id]))
@@ -456,9 +465,8 @@ class CampaignManager:
                 wait_sec = e.seconds
                 self.add_log("Telegram", "Limit", "warning", f"Telegram FloodWait cheklovi! {wait_sec} soniya kutilmoqda...")
                 self.stats["current_status_text"] = f"Telegram cheklovi: {wait_sec}s kutilmoqda"
-                await self.broadcast_ws("progress", {"stats": self.stats})
+                await broadcast_user_ws(self.user_id, "progress", {"stats": self.stats})
                 await asyncio.sleep(wait_sec + 2)
-                # Retry once
                 try:
                     input_contact = InputPhoneContact(client_id=random.randint(1000, 99999), phone=phone, first_name=name or "Mijoz", last_name="")
                     import_res = await client(ImportContactsRequest([input_contact]))
@@ -506,15 +514,14 @@ class CampaignManager:
 
             self.results.append(result_entry)
             self.stats["processed"] = idx + 1
-            await self.broadcast_ws("progress", {"stats": self.stats})
+            await broadcast_user_ws(self.user_id, "progress", {"stats": self.stats})
 
             # Delay before next message if not last item
             if idx < len(to_process) - 1 and self.status == "running":
                 sleep_sec = random.randint(min(self.min_delay, self.max_delay), max(self.min_delay, self.max_delay))
                 self.stats["current_status_text"] = f"Keyingi xabargacha: {sleep_sec} soniya kutilmoqda..."
-                await self.broadcast_ws("progress", {"stats": self.stats})
+                await broadcast_user_ws(self.user_id, "progress", {"stats": self.stats})
                 
-                # Sleep in increments of 1s to respond quickly to pause/stop
                 for _ in range(sleep_sec):
                     if self.status == "stopped" or not self.pause_event.is_set():
                         break
@@ -526,17 +533,42 @@ class CampaignManager:
             self.add_log("Tizim", "Tizim", "info", f"Rassilka yakunlandi! Jami yuborildi: {self.stats['sent']} ta.")
         
         self.stats["end_time"] = datetime.datetime.now().isoformat()
-        await self.broadcast_ws("status_change", {"status": self.status, "stats": self.stats})
+        self.stats["status"] = self.status
 
-campaign_mgr = CampaignManager()
+        # Auto-export results and save to history
+        try:
+            exp_path, exp_name = export_results_to_excel(self.results, self.user_id)
+            self.last_export_file = str(exp_path)
+            self.last_export_filename = exp_name
+            await database.save_campaign_history(
+                user_id=self.user_id,
+                stats=self.stats,
+                message_preview=self.message_template,
+                report_filename=exp_name,
+                report_path=str(exp_path),
+                results=self.results
+            )
+        except Exception as e:
+            print(f"User {self.user_id} campaign history save error: {e}")
+
+        await broadcast_user_ws(self.user_id, "status_change", {"status": self.status, "stats": self.stats})
+
+campaign_managers: dict[int, UserCampaignManager] = {}
+
+def get_user_campaign_mgr(user_id: int) -> UserCampaignManager:
+    if user_id not in campaign_managers:
+        campaign_managers[user_id] = UserCampaignManager(user_id)
+    return campaign_managers[user_id]
 
 # ----------------- Excel Results Exporter -----------------
-def export_results_to_excel(results):
+def export_results_to_excel(results, user_id: int):
+    user_export_dir = EXPORTS_DIR / str(user_id)
+    user_export_dir.mkdir(parents=True, exist_ok=True)
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Rassilka Natijalari"
 
-    # Header styling
     header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
     header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
     align_center = Alignment(horizontal="center", vertical="center")
@@ -586,7 +618,6 @@ def export_results_to_excel(results):
                 cell.fill = PatternFill(start_color=bg_col, end_color=bg_col, fill_type="solid")
                 cell.font = Font(name="Segoe UI", bold=True, color=txt_col)
 
-    # Auto-adjust column widths
     for col in ws.columns:
         max_len = max(len(str(cell.value or '')) for cell in col)
         col_letter = openpyxl.utils.get_column_letter(col[0].column)
@@ -594,7 +625,7 @@ def export_results_to_excel(results):
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     file_name = f"rassilka_natijalari_{timestamp}.xlsx"
-    export_path = EXPORTS_DIR / file_name
+    export_path = user_export_dir / file_name
     wb.save(export_path)
     return export_path, file_name
 
@@ -636,66 +667,267 @@ def generate_sample_template():
     wb.save(sample_path)
     return sample_path
 
-# ----------------- HTTP & WebSocket Handlers -----------------
+# ----------------- HTTP Middlewares & Handlers -----------------
+@web.middleware
+async def auth_middleware(request, handler):
+    token = request.cookies.get("auth_token")
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+    if not token and request.query.get("token"):
+        token = request.query.get("token")
+
+    user = None
+    if token:
+        user = await database.get_user_by_session(token)
+
+    request["user"] = user
+    request["user_id"] = user["id"] if user else None
+
+    # Public API paths
+    public_paths = [
+        "/api/auth/login",
+        "/api/auth/register",
+        "/api/auth/google",
+        "/api/excel/template",
+    ]
+
+    if request.path.startswith("/api/") and request.path not in public_paths:
+        if not user:
+            return web.json_response({
+                "ok": False,
+                "error": "Iltimos, avval tizimga kiring!",
+                "unauthorized": True
+            }, status=401)
+
+    return await handler(request)
+
 async def handle_index(request):
     return web.FileResponse(STATIC_DIR / "index.html")
 
-async def handle_get_status(request):
-    cfg = load_config()
+# ----------------- User Auth Handlers -----------------
+async def handle_user_register(request):
+    data = await request.json()
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
+    full_name = data.get("full_name", "").strip()
+
+    if not email:
+        return web.json_response({"ok": False, "error": "Gmail / Pochta manzilingizni kiriting!"}, status=400)
+    if "@" not in email or "." not in email:
+        return web.json_response({"ok": False, "error": "Yaroqli Gmail yoki elektron pochta kiriting!"}, status=400)
+    if len(password) < 6:
+        return web.json_response({"ok": False, "error": "Parol kamida 6 ta belgidan iborat bo'lishi kerak!"}, status=400)
+
+    try:
+        user = await database.create_user(email, password, full_name)
+        token = await database.create_session(user["id"])
+        
+        resp = web.json_response({
+            "ok": True,
+            "user": user,
+            "token": token,
+            "message": "Muvaffaqiyatli ro'yxatdan o'tdingiz!"
+        })
+        resp.set_cookie("auth_token", token, max_age=30*86400, httponly=True, samesite="Lax", path="/")
+        return resp
+    except ValueError as ve:
+        return web.json_response({"ok": False, "error": str(ve)}, status=400)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": f"Tizim xatoligi: {str(e)}"}, status=500)
+
+async def handle_user_login(request):
+    data = await request.json()
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
+
+    if not email or not password:
+        return web.json_response({"ok": False, "error": "Gmail va parolni to'liq kiriting!"}, status=400)
+
+    user = await database.authenticate_user(email, password)
+    if not user:
+        return web.json_response({"ok": False, "error": "Pochta manzili yoki parol noto'g'ri!"}, status=401)
+
+    token = await database.create_session(user["id"])
+    
+    # Auto-connect Telegram if user already saved credentials
+    user_settings = await database.get_user_settings(user["id"])
+    if user_settings.get("api_id") and user_settings.get("api_hash"):
+        tg_mgr = get_user_telegram_mgr(user["id"])
+        try:
+            await tg_mgr.init_client(user_settings["api_id"], user_settings["api_hash"])
+        except Exception:
+            pass
+
+    resp = web.json_response({
+        "ok": True,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "avatar": user["avatar"]
+        },
+        "token": token
+    })
+    resp.set_cookie("auth_token", token, max_age=30*86400, httponly=True, samesite="Lax", path="/")
+    return resp
+
+async def handle_google_auth(request):
+    data = await request.json()
+    email = data.get("email", "").strip()
+    full_name = data.get("full_name", "").strip()
+    avatar = data.get("avatar", "").strip()
+    credential = data.get("credential", "").strip()
+
+    if credential and not email:
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as http_sess:
+                async with http_sess.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}") as g_resp:
+                    if g_resp.status == 200:
+                        g_info = await g_resp.json()
+                        email = g_info.get("email", "").strip()
+                        full_name = g_info.get("name", "").strip()
+                        avatar = g_info.get("picture", "").strip()
+        except Exception as e:
+            print(f"Google token verification error: {e}")
+
+    if not email:
+        return web.json_response({"ok": False, "error": "Gmail manzili topilmadi!"}, status=400)
+
+    user = await database.get_or_create_google_user(email, full_name, avatar)
+    token = await database.create_session(user["id"])
+
+    # Auto-connect Telegram if user settings exist
+    user_settings = await database.get_user_settings(user["id"])
+    if user_settings.get("api_id") and user_settings.get("api_hash"):
+        tg_mgr = get_user_telegram_mgr(user["id"])
+        try:
+            await tg_mgr.init_client(user_settings["api_id"], user_settings["api_hash"])
+        except Exception:
+            pass
+
+    resp = web.json_response({
+        "ok": True,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "avatar": user["avatar"]
+        },
+        "token": token
+    })
+    resp.set_cookie("auth_token", token, max_age=30*86400, httponly=True, samesite="Lax", path="/")
+    return resp
+
+async def handle_user_logout(request):
+    token = request.cookies.get("auth_token")
+    if token:
+        await database.delete_session(token)
+    resp = web.json_response({"ok": True})
+    resp.del_cookie("auth_token", path="/")
+    return resp
+
+async def handle_user_me(request):
+    user = request.get("user")
+    if not user:
+        return web.json_response({"ok": False, "error": "Avtorizatsiyadan o'tilmagan"}, status=401)
     return web.json_response({
+        "ok": True,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "avatar": user["avatar"]
+        }
+    })
+
+# ----------------- Status & Settings (Per User) -----------------
+async def handle_get_status(request):
+    user_id = request["user_id"]
+    user_settings = await database.get_user_settings(user_id)
+    tg_mgr = get_user_telegram_mgr(user_id)
+    cmp_mgr = get_user_campaign_mgr(user_id)
+
+    # Check connection if settings exist
+    if user_settings.get("api_id") and user_settings.get("api_hash") and not tg_mgr.is_connected:
+        try:
+            await tg_mgr.init_client(user_settings["api_id"], user_settings["api_hash"])
+        except Exception:
+            pass
+
+    stats = await database.get_user_stats(user_id)
+    return web.json_response({
+        "user": request["user"],
+        "analytics": stats,
         "telegram": {
-            "is_connected": telegram_mgr.is_connected,
-            "is_authorized": telegram_mgr.is_authorized,
-            "user": telegram_mgr.user_info,
-            "has_credentials": bool(cfg.get("api_id") and cfg.get("api_hash"))
+            "is_connected": tg_mgr.is_connected,
+            "is_authorized": tg_mgr.is_authorized,
+            "user": tg_mgr.user_info,
+            "has_credentials": bool(user_settings.get("api_id") and user_settings.get("api_hash")),
+            "is_default_api": bool(not user_settings.get("api_id") or user_settings.get("api_id") == DEFAULT_API_ID)
         },
         "campaign": {
-            "status": campaign_mgr.status,
-            "stats": campaign_mgr.stats
+            "status": cmp_mgr.status,
+            "stats": cmp_mgr.stats
         },
-        "config": cfg
+        "config": user_settings
     })
 
 async def handle_save_config(request):
+    user_id = request["user_id"]
     data = await request.json()
-    saved = save_config(data)
-    # Check if we should auto-connect
-    if saved.get("api_id") and saved.get("api_hash") and not telegram_mgr.is_authorized:
+    saved = await database.save_user_settings(user_id, data)
+    
+    tg_mgr = get_user_telegram_mgr(user_id)
+    if saved.get("api_id") and saved.get("api_hash") and not tg_mgr.is_authorized:
         try:
-            await telegram_mgr.init_client(saved["api_id"], saved["api_hash"])
+            await tg_mgr.init_client(saved["api_id"], saved["api_hash"])
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)})
-    return web.json_response({"ok": True, "config": saved, "is_authorized": telegram_mgr.is_authorized, "user": telegram_mgr.user_info})
 
+    return web.json_response({
+        "ok": True,
+        "config": saved,
+        "is_authorized": tg_mgr.is_authorized,
+        "user": tg_mgr.user_info
+    })
+
+# ----------------- Telegram Auth (Per User) -----------------
 async def handle_auth_send_code(request):
+    user_id = request["user_id"]
     data = await request.json()
-    api_id = data.get("api_id")
-    api_hash = data.get("api_hash")
-    phone = data.get("phone")
+    api_id = str(data.get("api_id", "")).strip() or DEFAULT_API_ID
+    api_hash = str(data.get("api_hash", "")).strip() or DEFAULT_API_HASH
+    phone = str(data.get("phone", "")).strip()
 
-    if not api_id or not api_hash or not phone:
-        return web.json_response({"ok": False, "error": "API ID, API Hash va Telefon raqamni to'ldiring!"}, status=400)
+    if not phone:
+        return web.json_response({"ok": False, "error": "Telegram telefon raqamingizni kiriting!"}, status=400)
 
-    save_config({"api_id": api_id, "api_hash": api_hash, "phone": phone})
+    await database.save_user_settings(user_id, {"api_id": api_id, "api_hash": api_hash, "phone": phone})
+    tg_mgr = get_user_telegram_mgr(user_id)
 
     try:
-        await telegram_mgr.init_client(api_id, api_hash)
-        if telegram_mgr.is_authorized:
-            return web.json_response({"ok": True, "status": "already_authorized", "user": telegram_mgr.user_info})
+        await tg_mgr.init_client(api_id, api_hash)
+        if tg_mgr.is_authorized:
+            return web.json_response({"ok": True, "status": "already_authorized", "user": tg_mgr.user_info})
 
-        res = await telegram_mgr.request_code(phone)
+        res = await tg_mgr.request_code(phone)
         return web.json_response({"ok": True, "status": "code_sent", "phone": res["phone"]})
     except Exception as e:
         return web.json_response({"ok": False, "error": f"Xatolik: {str(e)}"}, status=500)
 
 async def handle_auth_verify_code(request):
+    user_id = request["user_id"]
     data = await request.json()
     code = data.get("code")
     if not code:
         return web.json_response({"ok": False, "error": "SMS yoki Telegram kodini kiriting!"}, status=400)
 
+    tg_mgr = get_user_telegram_mgr(user_id)
     try:
-        res = await telegram_mgr.sign_in_with_code(code)
+        res = await tg_mgr.sign_in_with_code(code)
         if res["status"] == "success":
             return web.json_response({"ok": True, "status": "success", "user": res["user"]})
         elif res["status"] == "password_needed":
@@ -704,21 +936,31 @@ async def handle_auth_verify_code(request):
         return web.json_response({"ok": False, "error": f"Tasdiqlashda xatolik: {str(e)}"}, status=400)
 
 async def handle_auth_verify_password(request):
+    user_id = request["user_id"]
     data = await request.json()
     password = data.get("password")
     if not password:
         return web.json_response({"ok": False, "error": "2FA parolini kiriting!"}, status=400)
+
+    tg_mgr = get_user_telegram_mgr(user_id)
     try:
-        res = await telegram_mgr.sign_in_with_password(password)
+        res = await tg_mgr.sign_in_with_password(password)
         return web.json_response({"ok": True, "status": "success", "user": res["user"]})
     except Exception as e:
         return web.json_response({"ok": False, "error": f"Parol noto'g'ri: {str(e)}"}, status=400)
 
-async def handle_auth_logout(request):
-    await telegram_mgr.logout()
+async def handle_auth_logout_telegram(request):
+    user_id = request["user_id"]
+    tg_mgr = get_user_telegram_mgr(user_id)
+    await tg_mgr.logout()
     return web.json_response({"ok": True})
 
+# ----------------- File Uploads (Per User) -----------------
 async def handle_upload_excel(request):
+    user_id = request["user_id"]
+    user_upload_dir = UPLOADS_DIR / str(user_id)
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
+
     reader = await request.multipart()
     saved_path = None
     while True:
@@ -727,7 +969,7 @@ async def handle_upload_excel(request):
             break
         if part.name == "excel_file":
             filename = f"contacts_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-            saved_path = UPLOADS_DIR / filename
+            saved_path = user_upload_dir / filename
             with open(saved_path, "wb") as f:
                 while True:
                     chunk = await part.read_chunk()
@@ -749,6 +991,10 @@ async def handle_upload_excel(request):
         return web.json_response({"ok": False, "error": f"Excelni o'qishda xatolik: {str(e)}"}, status=500)
 
 async def handle_upload_media(request):
+    user_id = request["user_id"]
+    user_upload_dir = UPLOADS_DIR / str(user_id)
+    user_upload_dir.mkdir(parents=True, exist_ok=True)
+
     reader = await request.multipart()
     saved_path = None
     filename = ""
@@ -759,7 +1005,7 @@ async def handle_upload_media(request):
         if part.name == "media_file":
             ext = Path(part.filename).suffix if part.filename else ".jpg"
             filename = f"media_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-            saved_path = UPLOADS_DIR / filename
+            saved_path = user_upload_dir / filename
             with open(saved_path, "wb") as f:
                 while True:
                     chunk = await part.read_chunk()
@@ -770,11 +1016,16 @@ async def handle_upload_media(request):
         return web.json_response({"ok": True, "file_path": str(saved_path), "filename": filename})
     return web.json_response({"ok": False, "error": "Media yuklanmadi"}, status=400)
 
+# ----------------- Campaign Controls (Per User) -----------------
 async def handle_campaign_start(request):
-    if not telegram_mgr.is_authorized:
+    user_id = request["user_id"]
+    tg_mgr = get_user_telegram_mgr(user_id)
+    cmp_mgr = get_user_campaign_mgr(user_id)
+
+    if not tg_mgr.is_authorized:
         return web.json_response({"ok": False, "error": "Avval Telegram akkauntga ulaning!"}, status=400)
 
-    if campaign_mgr.status in ("running", "paused"):
+    if cmp_mgr.status in ("running", "paused"):
         return web.json_response({"ok": False, "error": "Rassilka allaqachon ishlayapti!"}, status=400)
 
     data = await request.json()
@@ -791,66 +1042,76 @@ async def handle_campaign_start(request):
     if not message and not media_path:
         return web.json_response({"ok": False, "error": "Xabar matni yoki rasm kiritilishi shart!"}, status=400)
 
-    campaign_mgr.reset()
-    campaign_mgr.contacts = contacts
-    campaign_mgr.message_template = message
-    campaign_mgr.media_path = media_path
-    campaign_mgr.min_delay = min_delay
-    campaign_mgr.max_delay = max_delay
-    campaign_mgr.auto_clean_contacts = auto_clean
-    campaign_mgr.max_limit = max_limit
+    cmp_mgr.reset()
+    cmp_mgr.contacts = contacts
+    cmp_mgr.message_template = message
+    cmp_mgr.media_path = media_path
+    cmp_mgr.min_delay = min_delay
+    cmp_mgr.max_delay = max_delay
+    cmp_mgr.auto_clean_contacts = auto_clean
+    cmp_mgr.max_limit = max_limit
 
-    # Save preferences
-    save_config({
+    # Save user preferences to DB
+    await database.save_user_settings(user_id, {
         "min_delay": min_delay,
         "max_delay": max_delay,
         "auto_clean_contacts": auto_clean,
         "max_limit": max_limit
     })
 
-    # Start task
-    campaign_mgr.task = asyncio.create_task(campaign_mgr.run())
+    # Start user's async campaign task
+    cmp_mgr.task = asyncio.create_task(cmp_mgr.run())
 
     return web.json_response({"ok": True, "status": "started", "total": len(contacts)})
 
 async def handle_campaign_pause(request):
-    if campaign_mgr.status == "running":
-        campaign_mgr.status = "paused"
-        campaign_mgr.pause_event.clear()
-        campaign_mgr.stats["current_status_text"] = "Vaqtincha to'xtatildi (Pauza)"
-        await campaign_mgr.broadcast_ws("status_change", {"status": "paused", "stats": campaign_mgr.stats})
+    user_id = request["user_id"]
+    cmp_mgr = get_user_campaign_mgr(user_id)
+    if cmp_mgr.status == "running":
+        cmp_mgr.status = "paused"
+        cmp_mgr.pause_event.clear()
+        cmp_mgr.stats["current_status_text"] = "Vaqtincha to'xtatildi (Pauza)"
+        await broadcast_user_ws(user_id, "status_change", {"status": "paused", "stats": cmp_mgr.stats})
         return web.json_response({"ok": True, "status": "paused"})
-    return web.json_response({"ok": False, "error": "Rassilka 'running' holatida emas"})
+    return web.json_response({"ok": False, "error": "Rassilka faol emas"})
 
 async def handle_campaign_resume(request):
-    if campaign_mgr.status == "paused":
-        campaign_mgr.status = "running"
-        campaign_mgr.pause_event.set()
-        campaign_mgr.stats["current_status_text"] = "Yuborilmoqda..."
-        await campaign_mgr.broadcast_ws("status_change", {"status": "running", "stats": campaign_mgr.stats})
+    user_id = request["user_id"]
+    cmp_mgr = get_user_campaign_mgr(user_id)
+    if cmp_mgr.status == "paused":
+        cmp_mgr.status = "running"
+        cmp_mgr.pause_event.set()
+        cmp_mgr.stats["current_status_text"] = "Yuborilmoqda..."
+        await broadcast_user_ws(user_id, "status_change", {"status": "running", "stats": cmp_mgr.stats})
         return web.json_response({"ok": True, "status": "running"})
-    return web.json_response({"ok": False, "error": "Rassilka 'paused' holatida emas"})
+    return web.json_response({"ok": False, "error": "Rassilka pauzada emas"})
 
 async def handle_campaign_stop(request):
-    if campaign_mgr.status in ("running", "paused"):
-        campaign_mgr.status = "stopped"
-        campaign_mgr.pause_event.set()
-        campaign_mgr.stats["current_status_text"] = "To'xtatildi"
-        await campaign_mgr.broadcast_ws("status_change", {"status": "stopped", "stats": campaign_mgr.stats})
+    user_id = request["user_id"]
+    cmp_mgr = get_user_campaign_mgr(user_id)
+    if cmp_mgr.status in ("running", "paused"):
+        cmp_mgr.status = "stopped"
+        cmp_mgr.pause_event.set()
+        cmp_mgr.stats["current_status_text"] = "To'xtatildi"
+        await broadcast_user_ws(user_id, "status_change", {"status": "stopped", "stats": cmp_mgr.stats})
         return web.json_response({"ok": True, "status": "stopped"})
     return web.json_response({"ok": False, "error": "Rassilka faol emas"})
 
 async def handle_campaign_logs(request):
+    user_id = request["user_id"]
+    cmp_mgr = get_user_campaign_mgr(user_id)
     return web.json_response({
-        "status": campaign_mgr.status,
-        "stats": campaign_mgr.stats,
-        "logs": campaign_mgr.logs[-100:]  # last 100 logs
+        "status": cmp_mgr.status,
+        "stats": cmp_mgr.stats,
+        "logs": cmp_mgr.logs[-100:]
     })
 
 async def handle_export_excel(request):
-    if not campaign_mgr.results:
+    user_id = request["user_id"]
+    cmp_mgr = get_user_campaign_mgr(user_id)
+    if not cmp_mgr.results:
         return web.Response(text="Hali natijalar mavjud emas!", status=404)
-    file_path, file_name = export_results_to_excel(campaign_mgr.results)
+    file_path, file_name = export_results_to_excel(cmp_mgr.results, user_id)
     return web.FileResponse(file_path, headers={
         "Content-Disposition": f'attachment; filename="{file_name}"'
     })
@@ -861,18 +1122,49 @@ async def handle_download_template(request):
         "Content-Disposition": 'attachment; filename="namuna_kontaktlar.xlsx"'
     })
 
+# ----------------- Campaign History (Per User) -----------------
+async def handle_campaign_history(request):
+    user_id = request["user_id"]
+    history = await database.get_user_campaign_history(user_id)
+    return web.json_response({"ok": True, "history": history})
+
+async def handle_download_history_report(request):
+    user_id = request["user_id"]
+    campaign_id = int(request.match_info.get("id", 0))
+    campaign = await database.get_campaign_by_id(campaign_id, user_id)
+    if not campaign or not campaign.get("report_path"):
+        return web.Response(text="Hisobot fayli topilmadi!", status=404)
+    
+    file_path = Path(campaign["report_path"])
+    if not file_path.exists():
+        return web.Response(text="Hisobot fayli serverda topilmadi!", status=404)
+
+    return web.FileResponse(file_path, headers={
+        "Content-Disposition": f'attachment; filename="{campaign.get("report_filename", "hisobot.xlsx")}"'
+    })
+
+# ----------------- WebSocket (Per User) -----------------
 async def handle_ws(request):
+    user_id = request.get("user_id")
+    if not user_id:
+        return web.Response(status=401, text="Avtorizatsiya talab qilinadi")
+
     ws = web.WebSocketResponse()
     await ws.prepare(request)
-    campaign_mgr.ws_clients.add(ws)
 
-    # Send initial current state
+    if user_id not in user_ws_connections:
+        user_ws_connections[user_id] = set()
+    user_ws_connections[user_id].add(ws)
+
+    cmp_mgr = get_user_campaign_mgr(user_id)
+
+    # Send initial state to this specific connected user
     await ws.send_str(json.dumps({
         "type": "init",
         "data": {
-            "status": campaign_mgr.status,
-            "stats": campaign_mgr.stats,
-            "logs": campaign_mgr.logs[-50:]
+            "status": cmp_mgr.status,
+            "stats": cmp_mgr.stats,
+            "logs": cmp_mgr.logs[-50:]
         }
     }, ensure_ascii=False))
 
@@ -883,57 +1175,68 @@ async def handle_ws(request):
             elif msg.type == WSMsgType.ERROR:
                 break
     finally:
-        campaign_mgr.ws_clients.discard(ws)
+        if user_id in user_ws_connections:
+            user_ws_connections[user_id].discard(ws)
 
     return ws
 
-# ----------------- App Startup & Background Client Check -----------------
+# ----------------- App Lifecycle -----------------
 async def on_startup(app):
-    cfg = load_config()
-    if cfg.get("api_id") and cfg.get("api_hash"):
-        try:
-            print("Telegram sessiyasi tekshirilmoqda...")
-            await telegram_mgr.init_client(cfg["api_id"], cfg["api_hash"])
-            if telegram_mgr.is_authorized:
-                print(f"Telegram akkaunt muvaffaqiyatli ulandi: {telegram_mgr.user_info.get('first_name')} ({telegram_mgr.user_info.get('phone')})")
-        except Exception as e:
-            print(f"Telegram avto-ulanishda xato: {e}")
+    await database.init_db()
+    print("[*] SQLite ma'lumotlar bazasi ishga tushirildi.")
 
 async def on_cleanup(app):
-    if telegram_mgr.client:
-        try:
-            await telegram_mgr.client.disconnect()
-        except Exception:
-            pass
+    print("[*] Telegram mijozlari uzilmoqda...")
+    for uid, mgr in list(telegram_managers.items()):
+        if mgr.client:
+            try:
+                await mgr.client.disconnect()
+            except Exception:
+                pass
 
 def create_app():
-    app = web.Application()
+    app = web.Application(middlewares=[auth_middleware])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
 
-    # Routes
+    # Main page & Static assets
     app.router.add_get("/", handle_index)
     app.router.add_static("/static/", path=STATIC_DIR, name="static")
     app.router.add_static("/uploads/", path=UPLOADS_DIR, name="uploads")
 
-    app.router.add_get("/api/status", handle_get_status)
-    app.router.add_post("/api/config", handle_save_config)
+    # Auth routes
+    app.router.add_post("/api/auth/register", handle_user_register)
+    app.router.add_post("/api/auth/login", handle_user_login)
+    app.router.add_post("/api/auth/google", handle_google_auth)
+    app.router.add_post("/api/auth/logout", handle_user_logout)
+    app.router.add_get("/api/auth/me", handle_user_me)
+
+    # Telegram Account routes
     app.router.add_post("/api/auth/send_code", handle_auth_send_code)
     app.router.add_post("/api/auth/verify_code", handle_auth_verify_code)
     app.router.add_post("/api/auth/verify_password", handle_auth_verify_password)
-    app.router.add_post("/api/auth/logout", handle_auth_logout)
+    app.router.add_post("/api/auth/logout_telegram", handle_auth_logout_telegram)
 
+    # User Settings & Status
+    app.router.add_get("/api/status", handle_get_status)
+    app.router.add_post("/api/config", handle_save_config)
+
+    # File uploads & template
     app.router.add_post("/api/excel/upload", handle_upload_excel)
     app.router.add_post("/api/media/upload", handle_upload_media)
     app.router.add_get("/api/excel/template", handle_download_template)
 
+    # Campaign routes
     app.router.add_post("/api/campaign/start", handle_campaign_start)
     app.router.add_post("/api/campaign/pause", handle_campaign_pause)
     app.router.add_post("/api/campaign/resume", handle_campaign_resume)
     app.router.add_post("/api/campaign/stop", handle_campaign_stop)
     app.router.add_get("/api/campaign/logs", handle_campaign_logs)
     app.router.add_get("/api/campaign/export", handle_export_excel)
+    app.router.add_get("/api/campaign/history", handle_campaign_history)
+    app.router.add_get("/api/campaign/history/{id}/download", handle_download_history_report)
 
+    # WebSocket
     app.router.add_get("/ws", handle_ws)
 
     return app
@@ -942,11 +1245,10 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     host = os.environ.get("HOST", "0.0.0.0")
     print("=" * 60)
-    print(f"[*] Telegram Excel Rassilka Dashboard ishga tushdi!")
+    print("[*] Telegram Excel Rassilka SaaS Platformasi ishga tushdi!")
     print(f"[*] Server manzili: http://{host}:{port}")
     print("=" * 60)
 
-    # Auto-open browser only on desktop machines
     if sys.platform == "win32" or os.environ.get("DISPLAY"):
         def open_browser():
             try:

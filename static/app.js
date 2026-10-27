@@ -1,5 +1,7 @@
 // App State
 let appState = {
+  user: null,
+  authMode: 'login', // 'login' or 'register'
   telegram: {
     isConnected: false,
     isAuthorized: false,
@@ -34,9 +36,8 @@ let ws = null;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
-  initApp();
+  checkUserAuth();
   setupDragAndDrop();
-  connectWebSocket();
   setupMessageTime();
   initMobileView();
 });
@@ -57,10 +58,241 @@ function setupMessageTime() {
   if (el) el.textContent = timeStr;
 }
 
-// Fetch Initial Status
+// ----------------- User Auth & SaaS Management -----------------
+async function checkUserAuth() {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ok && data.user) {
+        setUserLoggedIn(data.user);
+        initApp();
+        connectWebSocket();
+        return;
+      }
+    }
+    setUserLoggedOut();
+    openUserAuthModal();
+  } catch (err) {
+    console.warn('Auth check error:', err);
+    setUserLoggedOut();
+    openUserAuthModal();
+  }
+}
+
+function setUserLoggedIn(user) {
+  appState.user = user;
+
+  const btnLogin = document.getElementById('btn-open-user-auth');
+  const userBadge = document.getElementById('user-profile-badge');
+  const userName = document.getElementById('user-nav-name');
+  const userEmail = document.getElementById('user-nav-email');
+  const userAvatar = document.getElementById('user-nav-avatar');
+
+  if (btnLogin) btnLogin.classList.add('hidden');
+  if (userBadge) userBadge.classList.remove('hidden');
+
+  if (userName) userName.textContent = user.full_name || user.email.split('@')[0];
+  if (userEmail) userEmail.textContent = user.email;
+
+  if (userAvatar) {
+    const initial = (user.full_name ? user.full_name[0] : user.email[0]).toUpperCase();
+    userAvatar.textContent = initial;
+  }
+
+  closeUserAuthModal();
+}
+
+function setUserLoggedOut() {
+  appState.user = null;
+  const btnLogin = document.getElementById('btn-open-user-auth');
+  const userBadge = document.getElementById('user-profile-badge');
+
+  if (btnLogin) btnLogin.classList.remove('hidden');
+  if (userBadge) userBadge.classList.add('hidden');
+
+  setTelegramDisconnected();
+  if (ws) {
+    try { ws.close(); } catch (e) {}
+    ws = null;
+  }
+}
+
+function openUserAuthModal() {
+  const modal = document.getElementById('user-auth-modal');
+  if (modal) {
+    modal.classList.remove('hidden');
+    clearAuthErrors();
+  }
+}
+
+function closeUserAuthModal() {
+  const modal = document.getElementById('user-auth-modal');
+  if (modal) modal.classList.add('hidden');
+  clearAuthErrors();
+}
+
+function toggleAuthMode() {
+  if (appState.authMode === 'login') {
+    switchAuthMode('register');
+  } else {
+    switchAuthMode('login');
+  }
+}
+
+function switchAuthMode(mode) {
+  appState.authMode = mode;
+  const btnLogin = document.getElementById('tab-login-btn');
+  const btnRegister = document.getElementById('tab-register-btn');
+  const nameGroup = document.getElementById('register-name-group');
+  const modalTitle = document.getElementById('user-auth-modal-title');
+  const submitBtn = document.getElementById('btn-auth-submit');
+  const switchText = document.getElementById('auth-switch-text');
+  const switchBtn = document.getElementById('auth-switch-btn');
+
+  clearAuthErrors();
+
+  if (mode === 'login') {
+    if (btnLogin) btnLogin.classList.add('active');
+    if (btnRegister) btnRegister.classList.remove('active');
+    if (nameGroup) nameGroup.classList.add('hidden');
+    if (modalTitle) modalTitle.textContent = "Shaxsiy Kabinetga Kirish";
+    if (submitBtn) submitBtn.textContent = "Kirish";
+    if (switchText) switchText.textContent = "Hali akkauntingiz yo'qmi?";
+    if (switchBtn) switchBtn.textContent = "Ro'yxatdan o'tish";
+  } else {
+    if (btnLogin) btnLogin.classList.remove('active');
+    if (btnRegister) btnRegister.classList.add('active');
+    if (nameGroup) nameGroup.classList.remove('hidden');
+    if (modalTitle) modalTitle.textContent = "Ro'yxatdan O'tish";
+    if (submitBtn) submitBtn.textContent = "Ro'yxatdan o'tish";
+    if (switchText) switchText.textContent = "Akkauntingiz bormi?";
+    if (switchBtn) switchBtn.textContent = "Kirish";
+  }
+}
+
+function clearAuthErrors() {
+  const errEl = document.getElementById('user-auth-error');
+  const succEl = document.getElementById('user-auth-success');
+  if (errEl) {
+    errEl.textContent = '';
+    errEl.classList.add('hidden');
+  }
+  if (succEl) {
+    succEl.textContent = '';
+    succEl.classList.add('hidden');
+  }
+}
+
+function togglePasswordVisibility(inputId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+async function handleAuthSubmit(e) {
+  e.preventDefault();
+  clearAuthErrors();
+
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-user-password').value;
+  const fullName = document.getElementById('auth-full-name').value.trim();
+  const errEl = document.getElementById('user-auth-error');
+  const succEl = document.getElementById('user-auth-success');
+  const btn = document.getElementById('btn-auth-submit');
+
+  btn.disabled = true;
+  btn.textContent = "Kutilmoqda...";
+
+  const isRegister = appState.authMode === 'register';
+  const url = isRegister ? '/api/auth/register' : '/api/auth/login';
+  const payload = isRegister ? { email, password, full_name: fullName } : { email, password };
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || "Xatolik yuz berdi");
+    }
+
+    if (isRegister) {
+      succEl.textContent = "Muvaffaqiyatli ro'yxatdan o'tdingiz!";
+      succEl.classList.remove('hidden');
+    }
+
+    showToast(isRegister ? "Xush kelibsiz! Shaxsiy kabinetingiz ochildi." : "Muvaffaqiyatli kirdingiz!", "success");
+    setUserLoggedIn(data.user);
+    initApp();
+    connectWebSocket();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = isRegister ? "Ro'yxatdan o'tish" : "Kirish";
+  }
+}
+
+async function quickGoogleLogin() {
+  const emailInput = document.getElementById('auth-email');
+  let email = emailInput ? emailInput.value.trim() : '';
+  
+  if (!email || !email.includes('@')) {
+    email = prompt("Google / Gmail pochtangizni kiriting:", "foydalanuvchi@gmail.com");
+  }
+  if (!email) return;
+
+  const fullName = email.split('@')[0].replace(/[._]/g, ' ').toUpperCase();
+
+  try {
+    const res = await fetch('/api/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, full_name: fullName, avatar: '' })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "Google orqali kirishda xato");
+
+    showToast("Google orqali muvaffaqiyatli kirdingiz!", "success");
+    setUserLoggedIn(data.user);
+    initApp();
+    connectWebSocket();
+  } catch (err) {
+    const errEl = document.getElementById('user-auth-error');
+    if (errEl) {
+      errEl.textContent = err.message;
+      errEl.classList.remove('hidden');
+    }
+    showToast(err.message, "error");
+  }
+}
+
+async function logoutUser() {
+  if (!confirm("Haqiqatan ham shaxsiy kabinetdan chiqmoqchimisiz?")) return;
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    setUserLoggedOut();
+    showToast("Tizimdan chiqildi", "info");
+    openUserAuthModal();
+  } catch (err) {
+    console.error('Logout error:', err);
+  }
+}
+
+// ----------------- Fetch Initial User Dashboard Status -----------------
 async function initApp() {
   try {
     const res = await fetch('/api/status');
+    if (res.status === 401) {
+      setUserLoggedOut();
+      openUserAuthModal();
+      return;
+    }
     const data = await res.json();
 
     if (data.config) {
@@ -91,15 +323,18 @@ async function initApp() {
   }
 }
 
-// ----------------- WebSocket Connection -----------------
+// ----------------- WebSocket Connection (Per User) -----------------
 function connectWebSocket() {
+  if (!appState.user) return;
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws`;
 
   ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
-    console.log('WebSocket ulandi');
+    console.log('[WS] Shaxsiy kabinetga ulandi');
   };
 
   ws.onmessage = (event) => {
@@ -114,8 +349,9 @@ function connectWebSocket() {
         updateCampaignStatus(msg.data.status, msg.data.stats);
       } else if (msg.type === 'progress') {
         updateStats(msg.data.stats);
-      } else if (msg.type === 'log') {
-        appendLog(msg.data);
+      } else if (msg.type === 'new_log') {
+        appendLog(msg.data.log);
+        if (msg.data.stats) updateStats(msg.data.stats);
       }
     } catch (err) {
       console.error('WS parse error:', err);
@@ -123,13 +359,18 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
-    console.warn('WS uzildi, 3 soniyadan so\'ng qayta ulanadi...');
-    setTimeout(connectWebSocket, 3000);
+    if (appState.user) {
+      setTimeout(connectWebSocket, 3000);
+    }
   };
 }
 
 // ----------------- Telegram Auth Flow -----------------
 function openAuthModal() {
+  if (!appState.user) {
+    openUserAuthModal();
+    return;
+  }
   document.getElementById('auth-modal').classList.remove('hidden');
 }
 
@@ -146,7 +387,7 @@ function setTelegramAuthorized(user) {
   badge.classList.add('connected');
 
   const fullName = `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Telegram Foydalanuvchi';
-  document.getElementById('account-name').textContent = fullName;
+  document.getElementById('account-name').textContent = `TG: ${fullName}`;
   document.getElementById('profile-full-name').textContent = fullName;
   document.getElementById('profile-phone').textContent = user.phone ? `+${user.phone.replace('+', '')}` : '';
   document.getElementById('profile-username').textContent = user.username ? `@${user.username}` : '';
@@ -166,10 +407,88 @@ function setTelegramDisconnected() {
   const badge = document.getElementById('account-badge');
   badge.classList.add('disconnected');
   badge.classList.remove('connected');
-  document.getElementById('account-name').textContent = 'Akkaunt ulanmagan';
+  document.getElementById('account-name').textContent = 'Telegram ulanmagan';
 
   document.getElementById('auth-login-prompt').classList.remove('hidden');
   document.getElementById('auth-connected-view').classList.add('hidden');
+}
+
+// ----------------- Profile Modal & Advanced Telegram Settings -----------------
+function openProfileModal() {
+  if (!appState.user) {
+    openUserAuthModal();
+    return;
+  }
+  const modal = document.getElementById('profile-modal');
+  if (!modal) return;
+
+  const u = appState.user;
+  const nameEl = document.getElementById('profile-modal-name');
+  const emailEl = document.getElementById('profile-modal-email');
+  const avatarEl = document.getElementById('profile-modal-avatar');
+
+  if (nameEl) nameEl.textContent = u.full_name || u.email.split('@')[0];
+  if (emailEl) emailEl.textContent = u.email;
+  if (avatarEl) {
+    const init = (u.full_name ? u.full_name[0] : u.email[0]).toUpperCase();
+    avatarEl.textContent = init;
+  }
+
+  const tgUserTitle = document.getElementById('profile-tg-user-title');
+  const tgPhoneTitle = document.getElementById('profile-tg-phone-title');
+  const tgStatusBadge = document.getElementById('profile-tg-status-badge');
+
+  if (appState.telegram.isAuthorized && appState.telegram.user) {
+    const tg = appState.telegram.user;
+    if (tgUserTitle) tgUserTitle.textContent = `${tg.first_name || ''} ${tg.last_name || ''}`.trim() || 'Telegram Akkaunt';
+    if (tgPhoneTitle) tgPhoneTitle.textContent = tg.phone ? `+${tg.phone.replace('+', '')}` : 'Raqam mavjud';
+    if (tgStatusBadge) {
+      tgStatusBadge.textContent = 'Ulangan (Faol)';
+      tgStatusBadge.className = 'stat-chip stat-chip-success';
+    }
+  } else {
+    if (tgUserTitle) tgUserTitle.textContent = 'Telegram ulanmagan';
+    if (tgPhoneTitle) tgPhoneTitle.textContent = 'Rassilka qilish uchun profilni ulang';
+    if (tgStatusBadge) {
+      tgStatusBadge.textContent = 'Ulanmagan';
+      tgStatusBadge.className = 'stat-chip stat-chip-warning';
+    }
+  }
+
+  fetch('/api/status').then(r => r.json()).then(data => {
+    if (data.analytics) {
+      const a = data.analytics;
+      const cEl = document.getElementById('profile-stat-campaigns');
+      const sEl = document.getElementById('profile-stat-sent');
+      const rEl = document.getElementById('profile-stat-rate');
+      const fEl = document.getElementById('profile-stat-failed');
+
+      if (cEl) cEl.textContent = a.total_campaigns || 0;
+      if (sEl) sEl.textContent = a.total_sent || 0;
+      if (rEl) rEl.textContent = `${a.success_rate || 0}%`;
+      if (fEl) fEl.textContent = (a.total_not_found || 0) + (a.total_failed || 0);
+    }
+  }).catch(() => {});
+
+  modal.classList.remove('hidden');
+}
+
+function closeProfileModal() {
+  const modal = document.getElementById('profile-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function toggleCustomApiFields() {
+  const fields = document.getElementById('custom-api-fields');
+  const arrow = document.getElementById('api-toggle-arrow');
+  if (!fields) return;
+  if (fields.classList.contains('hidden')) {
+    fields.classList.remove('hidden');
+    if (arrow) arrow.textContent = '▲';
+  } else {
+    fields.classList.add('hidden');
+    if (arrow) arrow.textContent = '▼';
+  }
 }
 
 async function requestCode() {
@@ -181,8 +500,8 @@ async function requestCode() {
 
   errEl.classList.add('hidden');
 
-  if (!apiId || !apiHash || !phone) {
-    errEl.textContent = "Barcha maydonlarni (API ID, Hash, Telefon) to'ldiring!";
+  if (!phone) {
+    errEl.textContent = "Telegram telefon raqamingizni kiriting!";
     errEl.classList.remove('hidden');
     return;
   }
@@ -198,17 +517,14 @@ async function requestCode() {
     });
     const data = await res.json();
 
-    if (!data.ok) {
-      throw new Error(data.error || "Kod yuborilmadi");
-    }
+    if (!data.ok) throw new Error(data.error || "Kod yuborilmadi");
 
     if (data.status === 'already_authorized') {
-      showToast('Akkaunt allaqachon ulangan!', 'success');
+      showToast('Telegram akkaunt allaqachon ulangan!', 'success');
       setTelegramAuthorized(data.user);
       return;
     }
 
-    // Switch to step 2
     document.getElementById('auth-step-1').classList.add('hidden');
     document.getElementById('auth-step-2').classList.remove('hidden');
     document.getElementById('auth-modal-title').textContent = 'Tasdiqlash kodini kiriting';
@@ -245,12 +561,9 @@ async function verifyCode() {
     });
     const data = await res.json();
 
-    if (!data.ok) {
-      throw new Error(data.error || "Kod noto'g'ri");
-    }
+    if (!data.ok) throw new Error(data.error || "Kod noto'g'ri");
 
     if (data.status === 'password_needed') {
-      // 2FA required
       document.getElementById('auth-step-2').classList.add('hidden');
       document.getElementById('auth-step-3').classList.remove('hidden');
       document.getElementById('auth-modal-title').textContent = '2FA Parolini kiriting';
@@ -258,7 +571,7 @@ async function verifyCode() {
     }
 
     if (data.status === 'success') {
-      showToast('Akkaunt muvaffaqiyatli ulandi!', 'success');
+      showToast('Telegram akkaunt muvaffaqiyatli ulandi!', 'success');
       setTelegramAuthorized(data.user);
     }
   } catch (err) {
@@ -293,11 +606,9 @@ async function verifyPassword() {
     });
     const data = await res.json();
 
-    if (!data.ok) {
-      throw new Error(data.error || "Parol noto'g'ri");
-    }
+    if (!data.ok) throw new Error(data.error || "Parol noto'g'ri");
 
-    showToast('Akkaunt muvaffaqiyatli ulandi!', 'success');
+    showToast('Telegram akkaunt muvaffaqiyatli ulandi!', 'success');
     setTelegramAuthorized(data.user);
   } catch (err) {
     errEl.textContent = err.message;
@@ -309,11 +620,11 @@ async function verifyPassword() {
 }
 
 async function logoutTelegram() {
-  if (!confirm("Rostdan ham akkauntdan chiqmoqchimisiz?")) return;
+  if (!confirm("Rostdan ham Telegram akkauntingizni uzmoqchimisiz?")) return;
   try {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await fetch('/api/auth/logout_telegram', { method: 'POST' });
     setTelegramDisconnected();
-    showToast('Akkauntdan chiqildi', 'info');
+    showToast('Telegram akkaunt uzildi', 'info');
   } catch (err) {
     console.error('Logout error:', err);
   }
@@ -322,6 +633,7 @@ async function logoutTelegram() {
 // ----------------- Excel File Upload & Handling -----------------
 function setupDragAndDrop() {
   const dropzone = document.getElementById('dropzone');
+  if (!dropzone) return;
 
   ['dragenter', 'dragover'].forEach(eventName => {
     dropzone.addEventListener(eventName, (e) => {
@@ -353,174 +665,192 @@ function handleExcelSelect(e) {
 }
 
 async function uploadExcelFile(file) {
+  if (!appState.user) {
+    openUserAuthModal();
+    return;
+  }
+
   const formData = new FormData();
   formData.append('excel_file', file);
 
-  document.getElementById('dropzone-filename').textContent = `Yuklanmoqda: ${file.name}...`;
+  document.getElementById('dropzone-filename').textContent = `Fayl yuklanmoqda: ${file.name}...`;
 
   try {
     const res = await fetch('/api/excel/upload', {
       method: 'POST',
       body: formData
     });
-    const result = await res.json();
+    const data = await res.json();
 
-    if (!result.ok) {
-      throw new Error(result.error || "Excel yuklashda xato yuz berdi");
-    }
+    if (!data.ok) throw new Error(data.error || "Excel faylni yuklashda xatolik");
 
-    const data = result.data;
-    appState.excel.filePath = data.file_path;
-    appState.excel.headers = data.headers;
-    appState.excel.contacts = data.contacts;
-    appState.excel.totalContacts = data.total_contacts;
-    appState.excel.phoneColIdx = data.phone_col_idx;
-    appState.excel.nameColIdx = data.name_col_idx;
+    const parsed = data.data;
+    appState.excel.filePath = parsed.file_path;
+    appState.excel.headers = parsed.headers;
+    appState.excel.contacts = parsed.contacts;
+    appState.excel.totalContacts = parsed.total_contacts;
+    appState.excel.phoneColIdx = parsed.phone_col_idx;
+    appState.excel.nameColIdx = parsed.name_col_idx;
 
-    document.getElementById('dropzone-filename').textContent = `Fayl: ${file.name}`;
-    document.getElementById('total-contacts-badge').textContent = `${data.total_contacts} ta raqam`;
-    document.getElementById('stat-total').textContent = data.total_contacts;
-
-    // Populate column selects
-    const phoneSelect = document.getElementById('phone-column-select');
-    const nameSelect = document.getElementById('name-column-select');
-    phoneSelect.innerHTML = '';
-    nameSelect.innerHTML = '<option value="-1">— Belgilanmagan —</option>';
-
-    data.headers.forEach((h, i) => {
-      const optP = document.createElement('option');
-      optP.value = i;
-      optP.textContent = `${h} (Ustun ${i+1})`;
-      if (i === data.phone_col_idx) optP.selected = true;
-      phoneSelect.appendChild(optP);
-
-      const optN = document.createElement('option');
-      optN.value = i;
-      optN.textContent = `${h} (Ustun ${i+1})`;
-      if (data.name_col_idx !== null && i === data.name_col_idx) optN.selected = true;
-      nameSelect.appendChild(optN);
-    });
-
-    // Populate preview table
-    renderPreviewTable(data.preview);
+    document.getElementById('dropzone-filename').textContent = `Yuklandi: ${file.name}`;
+    document.getElementById('total-contacts-badge').textContent = `${parsed.total_contacts} ta`;
     document.getElementById('excel-summary').classList.remove('hidden');
 
-    showToast(`Excel yuklandi: ${data.total_contacts} ta kontakt topildi!`, 'success');
-    updateMessagePreview();
+    populateColumnSelectors(parsed.headers, parsed.phone_col_idx, parsed.name_col_idx);
+    renderPreviewTable(parsed.preview);
+    showToast(`Excel yuklandi! Jami: ${parsed.total_contacts} ta kontakt`, 'success');
   } catch (err) {
     document.getElementById('dropzone-filename').textContent = "Excel faylni bu yerga tashlang yoki bosing";
     showToast(err.message, 'error');
   }
 }
 
+function populateColumnSelectors(headers, phoneIdx, nameIdx) {
+  const phoneSelect = document.getElementById('phone-column-select');
+  const nameSelect = document.getElementById('name-column-select');
+
+  phoneSelect.innerHTML = '';
+  nameSelect.innerHTML = '<option value="-1">— Belgilanmagan —</option>';
+
+  headers.forEach((h, i) => {
+    const optPhone = document.createElement('option');
+    optPhone.value = i;
+    optPhone.textContent = `${h} (Ustun ${i+1})`;
+    if (i === phoneIdx) optPhone.selected = true;
+    phoneSelect.appendChild(optPhone);
+
+    const optName = document.createElement('option');
+    optName.value = i;
+    optName.textContent = `${h} (Ustun ${i+1})`;
+    if (i === nameIdx) optName.selected = true;
+    nameSelect.appendChild(optName);
+  });
+}
+
 function updateColumnMapping() {
   const phoneIdx = parseInt(document.getElementById('phone-column-select').value);
   const nameIdx = parseInt(document.getElementById('name-column-select').value);
-  
+
   appState.excel.phoneColIdx = phoneIdx;
   appState.excel.nameColIdx = nameIdx >= 0 ? nameIdx : null;
 
-  // Re-map contacts
   appState.excel.contacts.forEach(c => {
-    const rawRow = c.extra;
-    const phoneColName = appState.excel.headers[phoneIdx];
-    if (phoneColName && rawRow[phoneColName]) {
-      c.phone = rawRow[phoneColName];
-    }
-    if (nameIdx >= 0) {
-      const nameColName = appState.excel.headers[nameIdx];
-      c.name = rawRow[nameColName] || '';
+    const rawVal = c.extra[appState.excel.headers[phoneIdx]];
+    if (rawVal) c.phone = cleanPhone_js(rawVal);
+    if (appState.excel.nameColIdx !== null) {
+      c.name = c.extra[appState.excel.headers[appState.excel.nameColIdx]] || '';
     } else {
       c.name = '';
     }
   });
 
+  const previewSlice = appState.excel.contacts.slice(0, 5).map(c => ({
+    id: c.id,
+    phone: c.phone,
+    name: c.name || '—'
+  }));
+  renderPreviewTable(previewSlice);
   updateMessagePreview();
 }
 
-function renderPreviewTable(previewRows) {
+function cleanPhone_js(val) {
+  let digits = String(val).replace(/[^\d+]/g, '');
+  let raw = digits.replace('+', '');
+  if (raw.length === 9 && ['9', '8', '7', '3', '5'].includes(raw[0])) {
+    return '+998' + raw;
+  } else if (raw.length === 12 && raw.startsWith('998')) {
+    return '+' + raw;
+  } else if (!digits.startsWith('+')) {
+    return '+' + digits;
+  }
+  return digits;
+}
+
+function renderPreviewTable(rows) {
   const tbody = document.getElementById('preview-table-body');
   tbody.innerHTML = '';
-  if (!previewRows || previewRows.length === 0) return;
 
-  previewRows.slice(0, 5).forEach((r, idx) => {
+  rows.forEach(r => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${idx + 1}</td>
-      <td style="font-family:'JetBrains Mono', monospace; font-weight:600; color:#34d399;">${r.phone}</td>
-      <td>${r.name}</td>
+      <td>${r.id}</td>
+      <td style="font-family:'JetBrains Mono', monospace; color:#34d399;">${r.phone}</td>
+      <td>${r.name || '—'}</td>
     `;
     tbody.appendChild(tr);
   });
 }
 
-// ----------------- Message Composer & Dynamic Tags -----------------
+// ----------------- Message Editor & Live Preview -----------------
 function insertTag(tag) {
   const textarea = document.getElementById('message-text');
   const start = textarea.selectionStart;
   const end = textarea.selectionEnd;
   const text = textarea.value;
-
   textarea.value = text.substring(0, start) + tag + text.substring(end);
-  textarea.selectionStart = textarea.selectionEnd = start + tag.length;
   textarea.focus();
+  textarea.selectionStart = textarea.selectionEnd = start + tag.length;
   updateMessagePreview();
 }
 
 function updateMessagePreview() {
-  const rawText = document.getElementById('message-text').value;
-  const previewEl = document.getElementById('tg-preview-text');
+  const text = document.getElementById('message-text').value;
+  const previewText = document.getElementById('preview-message-text');
 
-  if (!rawText.trim()) {
-    previewEl.textContent = "Xabar matni kiritilmadi...";
-    return;
-  }
+  let sampleName = "Ali";
+  let samplePhone = "+998 90 123 45 67";
 
-  // Sample person from contacts or fallback
-  let sampleName = "Azizbek";
-  let samplePhone = "+998901234567";
   if (appState.excel.contacts.length > 0) {
     const first = appState.excel.contacts[0];
     if (first.name) sampleName = first.name;
     if (first.phone) samplePhone = first.phone;
   }
 
-  let formatted = rawText
+  let rendered = text
     .replace(/{ism}/g, sampleName)
     .replace(/{name}/g, sampleName)
     .replace(/{telefon}/g, samplePhone)
     .replace(/{phone}/g, samplePhone);
 
-  previewEl.textContent = formatted;
+  if (rendered.trim() === '') {
+    previewText.textContent = "Xabar matni bu yerda ko'rinadi...";
+  } else {
+    previewText.textContent = rendered;
+  }
 }
 
 // ----------------- Media Attachment -----------------
-async function handleMediaSelect(e) {
-  if (e.target.files.length === 0) return;
+function handleMediaSelect(e) {
+  if (!appState.user) {
+    openUserAuthModal();
+    return;
+  }
+  if (!e.target.files.length) return;
+
   const file = e.target.files[0];
   const formData = new FormData();
   formData.append('media_file', file);
 
   document.getElementById('media-filename').textContent = `Yuklanmoqda: ${file.name}...`;
 
-  try {
-    const res = await fetch('/api/media/upload', {
-      method: 'POST',
-      body: formData
-    });
-    const data = await res.json();
+  fetch('/api/media/upload', {
+    method: 'POST',
+    body: formData
+  })
+  .then(res => res.json())
+  .then(data => {
     if (!data.ok) throw new Error(data.error);
-
     appState.media.filePath = data.file_path;
     appState.media.filename = data.filename;
 
     document.getElementById('media-filename').textContent = `Rasm biriktirildi: ${file.name}`;
     document.getElementById('media-remove-btn').classList.remove('hidden');
     showToast('Rasm muvaffaqiyatli yuklandi', 'success');
-  } catch (err) {
+  })
+  .catch(err => {
     document.getElementById('media-filename').textContent = "Rasm tanlanmagan";
     showToast(err.message, 'error');
-  }
+  });
 }
 
 function removeMedia() {
@@ -533,6 +863,11 @@ function removeMedia() {
 
 // ----------------- Campaign Controls -----------------
 async function startCampaign() {
+  if (!appState.user) {
+    openUserAuthModal();
+    return;
+  }
+
   if (!appState.telegram.isAuthorized) {
     showToast("Avval Telegram akkauntingizni ulang!", "error");
     openAuthModal();
@@ -560,7 +895,6 @@ async function startCampaign() {
     return;
   }
 
-  // Clear logs table UI
   document.getElementById('logs-table-body').innerHTML = '';
 
   const payload = {
@@ -665,7 +999,6 @@ function updateCampaignStatus(status, stats) {
     statusText.textContent = "Kutilmoqda. Excel fayl va xabarni kiriting.";
   }
 
-  // Update mobile tab live indicator
   const mobileLiveDot = document.getElementById('mobile-live-dot');
   if (mobileLiveDot) {
     if (status === 'running') mobileLiveDot.classList.remove('hidden');
@@ -687,7 +1020,6 @@ function updateStats(stats) {
   document.getElementById('stat-notfound').textContent = notFound;
   document.getElementById('stat-failed').textContent = failed;
 
-  // Progress Bar
   const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
   document.getElementById('progress-percent').textContent = `${percent}%`;
   document.getElementById('progress-counts').textContent = `${processed} / ${total} ta`;
@@ -706,8 +1038,6 @@ function renderLogs(logs) {
 
 function appendLog(entry, scroll = true) {
   const tbody = document.getElementById('logs-table-body');
-  
-  // Remove placeholder row if present
   const emptyRow = tbody.querySelector('.empty-row');
   if (emptyRow) emptyRow.remove();
 
@@ -729,7 +1059,7 @@ function appendLog(entry, scroll = true) {
     <td style="font-family:'JetBrains Mono', monospace; font-weight:600; color:#34d399;">${entry.phone}</td>
     <td>${entry.name}</td>
     <td><span class="status-badge ${badgeClass}">${label}</span></td>
-    <td style="font-size:0.8rem; color:#cbd5e1;">${entry.detail || '—'}</td>
+    <td style="font-size:0.8rem; color:#cbd5e1;">${entry.message || entry.detail || '—'}</td>
   `;
 
   tbody.appendChild(tr);
@@ -740,9 +1070,77 @@ function appendLog(entry, scroll = true) {
   }
 }
 
+// ----------------- Campaign History Management -----------------
+function openHistoryModal() {
+  if (!appState.user) {
+    openUserAuthModal();
+    return;
+  }
+  const modal = document.getElementById('history-modal');
+  if (modal) {
+    modal.classList.remove('hidden');
+    loadCampaignHistory();
+  }
+}
+
+function closeHistoryModal() {
+  const modal = document.getElementById('history-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function loadCampaignHistory() {
+  const tbody = document.getElementById('history-table-body');
+  tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:24px;">Tarix yuklanmoqda...</td></tr>';
+
+  try {
+    const res = await fetch('/api/campaign/history');
+    if (res.status === 401) {
+      setUserLoggedOut();
+      closeHistoryModal();
+      openUserAuthModal();
+      return;
+    }
+    const data = await res.json();
+    if (!data.ok || !data.history || data.history.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:24px;">Hozircha hech qanday rassilka o\'tkazilmagan.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = '';
+    data.history.forEach((h, idx) => {
+      const tr = document.createElement('tr');
+      const preview = h.message_preview ? (h.message_preview.length > 35 ? h.message_preview.substring(0, 35) + '...' : h.message_preview) : '—';
+      
+      tr.innerHTML = `
+        <td style="font-weight:600;">#${h.id}</td>
+        <td style="font-size:0.8rem; color:#94a3b8; white-space:nowrap;">${h.created_at}</td>
+        <td style="font-size:0.825rem; max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${h.message_preview || ''}">${preview}</td>
+        <td><strong>${h.total}</strong></td>
+        <td><span class="stat-chip stat-chip-success">${h.sent}</span></td>
+        <td><span class="stat-chip stat-chip-warning">${h.not_found}</span></td>
+        <td><span class="stat-chip stat-chip-danger">${h.failed}</span></td>
+        <td>
+          <a href="/api/campaign/history/${h.id}/download" class="btn-download-sm" download>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px; height:13px;">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Excel
+          </a>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger" style="padding:24px;">Tarixni yuklashda xatolik: ${err.message}</td></tr>`;
+  }
+}
+
 // ----------------- Toast Notification -----------------
 function showToast(message, type = 'info') {
   const toast = document.getElementById('toast');
+  if (!toast) return;
   toast.className = `toast ${type}`;
   toast.textContent = message;
   toast.classList.remove('hidden');
@@ -752,7 +1150,7 @@ function showToast(message, type = 'info') {
   }, 4000);
 }
 
-// ----------------- Mobile Segmented Tab Switcher -----------------
+// ----------------- Mobile Tab Switcher -----------------
 function switchMobileTab(tab) {
   const setupCol = document.getElementById('config-col');
   const monitorCol = document.getElementById('monitor-col');
