@@ -1299,7 +1299,8 @@ async function startCampaign() {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
 
-    showToast("Rassilka boshlandi!", "success");
+    const varInfo = messages.length > 1 ? `${messages.length} xil variant navbat bilan` : "1 xil variant";
+    showToast(`Rassilka boshlandi (${varInfo})!`, "success");
     if (window.innerWidth <= 991) {
       switchMobileTab('monitor');
     }

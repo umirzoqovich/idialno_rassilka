@@ -21,6 +21,11 @@ fi
 echo "[!] Kutubxonalar tekshirilmoqda va yangilanmoqda..."
 .venv/bin/pip install -r requirements.txt
 
+echo "[!] Eski jarayonlar va 5000-port tozalanmoqda..."
+fuser -k 5000/tcp 2>/dev/null || true
+pkill -9 -f "python3 app.py" 2>/dev/null || true
+sleep 1
+
 echo "[✓] Server ishga tushirilmoqda..."
 echo "[✓] Tashqaridan kirish uchun brauzerda oching: http://SERVER_IP:5000"
 echo "============================================================"

@@ -495,7 +495,7 @@ class UserCampaignManager:
                     else:
                         await client.send_message(target_user, msg)
 
-                    variant_tag = f" [V{variant_num}]" if len(valid_templates) > 1 else ""
+                    variant_tag = f" [Variant {variant_num}]" if len(valid_templates) > 1 else ""
                     self.stats["sent"] += 1
                     result_entry["status"] = "sent"
                     result_entry["detail"] = f"Xabar muvaffaqiyatli yuborildi{variant_tag}"
@@ -519,7 +519,7 @@ class UserCampaignManager:
                             await client.send_file(target_user, self.media_path, caption=msg)
                         else:
                             await client.send_message(target_user, msg)
-                        variant_tag = f" [V{variant_num}]" if len(valid_templates) > 1 else ""
+                        variant_tag = f" [Variant {variant_num}]" if len(valid_templates) > 1 else ""
                         self.stats["sent"] += 1
                         result_entry["status"] = "sent"
                         result_entry["detail"] = f"Qayta urinishda yuborildi{variant_tag}"
