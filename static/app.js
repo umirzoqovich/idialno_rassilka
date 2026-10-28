@@ -1033,12 +1033,17 @@ function switchVariantTab(num) {
   const activeInput = getActiveVariantTextarea();
   if (activeInput) activeInput.focus();
 
+  updateVariantStatusTags();
   updateMessagePreview();
 }
 
 function getActiveVariantTextarea() {
   if (currentActiveVariant === 1) return document.getElementById('message-text');
   return document.getElementById(`message-text-${currentActiveVariant}`) || document.getElementById('message-text');
+}
+
+function onVariantModeChange() {
+  updateVariantStatusTags();
 }
 
 function onVariantInput(num) {
@@ -1075,18 +1080,23 @@ function updateVariantStatusTags() {
     }
   }
 
-  let count = 0;
-  if (v1) count++;
-  if (v2) count++;
-  if (v3) count++;
-  if (count === 0) count = 1;
-
+  const mode = document.querySelector('input[name="variant-send-mode"]:checked')?.value || 'rotation';
   const summary = document.getElementById('variant-summary-text');
   if (summary) {
-    if (count === 1) {
-      summary.textContent = "1 ta variant faol (Variant 1)";
+    if (mode === 'single') {
+      summary.innerHTML = `🎯 <b>Faqat Variant ${currentActiveVariant}</b> yuboriladi (Barcha mijozlarga faqat shu variant ketadi)`;
     } else {
-      summary.textContent = `${count} ta variant faol (Ketma-ket navbat bilan almashinadi)`;
+      let count = 0;
+      if (v1) count++;
+      if (v2) count++;
+      if (v3) count++;
+      if (count === 0) count = 1;
+
+      if (count === 1) {
+        summary.textContent = "1 ta variant faol (Variant 1)";
+      } else {
+        summary.textContent = `${count} ta variant faol (Ketma-ket navbat bilan almashinadi)`;
+      }
     }
   }
 }
@@ -1253,14 +1263,25 @@ async function startCampaign() {
     return;
   }
 
-  const var1 = (document.getElementById('message-text')?.value || '').trim();
-  const var2 = (document.getElementById('message-text-2')?.value || '').trim();
-  const var3 = (document.getElementById('message-text-3')?.value || '').trim();
+  const sendMode = document.querySelector('input[name="variant-send-mode"]:checked')?.value || 'rotation';
+  
+  let messages = [];
+  if (sendMode === 'single') {
+    const activeText = (getActiveVariantTextarea()?.value || '').trim();
+    if (!activeText && !appState.media.filePath) {
+      showToast(`Variant ${currentActiveVariant} matni bo'sh! Matn kiriting yoki boshqa variantni tanlang.`, "error");
+      return;
+    }
+    if (activeText) messages = [activeText];
+  } else {
+    const var1 = (document.getElementById('message-text')?.value || '').trim();
+    const var2 = (document.getElementById('message-text-2')?.value || '').trim();
+    const var3 = (document.getElementById('message-text-3')?.value || '').trim();
 
-  const messages = [];
-  if (var1) messages.push(var1);
-  if (var2) messages.push(var2);
-  if (var3) messages.push(var3);
+    if (var1) messages.push(var1);
+    if (var2) messages.push(var2);
+    if (var3) messages.push(var3);
+  }
 
   if (messages.length === 0 && !appState.media.filePath) {
     showToast("Kamida 1 ta xabar matni yoki rasm kiritilishi shart!", "error");
@@ -1299,7 +1320,9 @@ async function startCampaign() {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
 
-    const varInfo = messages.length > 1 ? `${messages.length} xil variant navbat bilan` : "1 xil variant";
+    const varInfo = sendMode === 'single'
+      ? `Faqat Variant ${currentActiveVariant}`
+      : (messages.length > 1 ? `${messages.length} xil variant ketma-ket` : "1 xil variant");
     showToast(`Rassilka boshlandi (${varInfo})!`, "success");
     if (window.innerWidth <= 991) {
       switchMobileTab('monitor');

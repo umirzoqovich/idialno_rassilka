@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=3.2">
+  <link rel="stylesheet" href="/static/style.css?v=4.0">
   <!-- Firebase SDK (v10 compat) -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
@@ -256,6 +256,26 @@
               <div class="variant-indicator-bar" id="variant-summary-bar">
                 <span class="pulse-indicator"></span>
                 <span id="variant-summary-text">1 ta variant faol (Variant 1)</span>
+              </div>
+
+              <!-- Sending Mode Selector -->
+              <div class="variant-mode-box mt-2">
+                <div class="variant-mode-options">
+                  <label class="variant-mode-opt">
+                    <input type="radio" name="variant-send-mode" value="rotation" checked onchange="onVariantModeChange()">
+                    <span class="mode-opt-content">
+                      <span class="mode-opt-title">🔄 Ketma-ket aylantirish</span>
+                      <span class="mode-opt-desc">1-mijozga V1, 2-mijozga V2, 3-mijozga V3...</span>
+                    </span>
+                  </label>
+                  <label class="variant-mode-opt">
+                    <input type="radio" name="variant-send-mode" value="single" onchange="onVariantModeChange()">
+                    <span class="mode-opt-content">
+                      <span class="mode-opt-title">🎯 Faqat tanlangan variant</span>
+                      <span class="mode-opt-desc">Hozir ochiq turgan variant barchaga ketadi</span>
+                    </span>
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -802,6 +822,6 @@
   <!-- Notification Toast -->
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/static/app.js?v=3.2"></script>
+  <script src="/static/app.js?v=4.0"></script>
 </body>
 </html>
