@@ -85,6 +85,32 @@ def clean_phone_number(val):
         return f"+{digits}"
     return digits
 
+# ----------------- Spintax Parser (Anti-Spam Text Randomizer) -----------------
+def process_spintax(text: str) -> str:
+    """
+    Parses {option1|option2|option3} syntax and randomly selects one option.
+    Allows creating hundreds of unique message variants for cold outreach.
+    """
+    if not text:
+        return ""
+    pattern = re.compile(r'\{([^{}]+)\}')
+    def replace_spin(match):
+        content = match.group(1)
+        if '|' in content:
+            options = content.split('|')
+            return random.choice(options).strip()
+        return match.group(0)
+
+    # Process nested or multiple spintax blocks
+    for _ in range(5):
+        if '{' not in text or '|' not in text:
+            break
+        new_text = pattern.sub(replace_spin, text)
+        if new_text == text:
+            break
+        text = new_text
+    return text
+
 # ----------------- Excel Processing -----------------
 def parse_excel_file(file_path):
     wb = openpyxl.load_workbook(file_path, data_only=True)
@@ -321,6 +347,7 @@ class UserCampaignManager:
         
         self.contacts = []
         self.message_template = ""
+        self.message_templates = []
         self.media_path = None
         self.min_delay = 15
         self.max_delay = 30
@@ -348,6 +375,7 @@ class UserCampaignManager:
         self.pause_event.set()
         self.contacts = []
         self.message_template = ""
+        self.message_templates = []
         self.media_path = None
         self.stats = {
             "total": 0,
@@ -398,7 +426,17 @@ class UserCampaignManager:
         self.stats["current_status_text"] = "Rassilka boshlandi..."
 
         await broadcast_user_ws(self.user_id, "status_change", {"status": "running", "stats": self.stats})
-        self.add_log("Tizim", "Tizim", "info", f"Rassilka boshlandi. Jami: {len(to_process)} ta mijoz.")
+        
+        valid_templates = [t.strip() for t in self.message_templates if t and t.strip()]
+        if not valid_templates and self.message_template and self.message_template.strip():
+            valid_templates = [self.message_template.strip()]
+        if not valid_templates:
+            valid_templates = [""]
+
+        var_count_str = f" ({len(valid_templates)} xil variant)" if len(valid_templates) > 1 else ""
+        self.add_log("Tizim", "Tizim", "info", f"Rassilka boshlandi. Jami: {len(to_process)} ta mijoz{var_count_str}.")
+
+        contacts_to_clean = []
 
         for idx, contact in enumerate(to_process):
             if self.status == "stopped":
@@ -412,12 +450,19 @@ class UserCampaignManager:
             name = contact.get("name", "")
             extra = contact.get("extra", {})
 
-            # Prepare personalized message
-            msg = self.message_template
+            # Multi-variant round-robin tanlash
+            template_idx = idx % len(valid_templates)
+            raw_msg = valid_templates[template_idx]
+            variant_num = template_idx + 1
+
+            # Prepare personalized message with Spintax
+            msg = raw_msg
             msg = msg.replace("{ism}", name or "").replace("{name}", name or "")
             msg = msg.replace("{telefon}", phone).replace("{phone}", phone)
             for k, v in extra.items():
                 msg = msg.replace(f"{{{k}}}", str(v))
+            # Anti-Spam: har bir qabul qiluvchi uchun noyob matn generatsiya qilish
+            msg = process_spintax(msg)
 
             client = tg_mgr.client
             if not client or not tg_mgr.is_authorized:
@@ -450,16 +495,14 @@ class UserCampaignManager:
                     else:
                         await client.send_message(target_user, msg)
 
+                    variant_tag = f" [V{variant_num}]" if len(valid_templates) > 1 else ""
                     self.stats["sent"] += 1
                     result_entry["status"] = "sent"
-                    result_entry["detail"] = "Xabar muvaffaqiyatli yuborildi"
-                    self.add_log(phone, name, "sent", "Xabar yuborildi")
+                    result_entry["detail"] = f"Xabar muvaffaqiyatli yuborildi{variant_tag}"
+                    self.add_log(phone, name, "sent", f"Xabar yuborildi{variant_tag}")
 
                     if self.auto_clean_contacts:
-                        try:
-                            await client(DeleteContactsRequest(id=[target_user.id]))
-                        except Exception:
-                            pass
+                        contacts_to_clean.append(target_user.id)
 
             except errors.FloodWaitError as e:
                 wait_sec = e.seconds
@@ -476,10 +519,13 @@ class UserCampaignManager:
                             await client.send_file(target_user, self.media_path, caption=msg)
                         else:
                             await client.send_message(target_user, msg)
+                        variant_tag = f" [V{variant_num}]" if len(valid_templates) > 1 else ""
                         self.stats["sent"] += 1
                         result_entry["status"] = "sent"
-                        result_entry["detail"] = "Qayta urinishda yuborildi"
-                        self.add_log(phone, name, "sent", "Qayta urinishda yuborildi")
+                        result_entry["detail"] = f"Qayta urinishda yuborildi{variant_tag}"
+                        self.add_log(phone, name, "sent", f"Qayta urinishda yuborildi{variant_tag}")
+                        if self.auto_clean_contacts:
+                            contacts_to_clean.append(target_user.id)
                     else:
                         self.stats["not_found"] += 1
                         result_entry["status"] = "not_found"
@@ -516,6 +562,17 @@ class UserCampaignManager:
             self.stats["processed"] = idx + 1
             await broadcast_user_ws(self.user_id, "progress", {"stats": self.stats})
 
+            # Anti-spam insoniy tanaffus: Har 10 ta muvaffaqiyatli xabardan so'ng qisqa dam olish
+            if self.stats["sent"] > 0 and self.stats["sent"] % 10 == 0 and idx < len(to_process) - 1 and self.status == "running":
+                rest_sec = random.randint(45, 75)
+                self.add_log("Telegram", "Himoya", "info", f"Anti-spam tanaffusi: 10 ta xabar ketdi. Telegram shubhasini kamaytirish uchun {rest_sec}s dam olinmoqda...")
+                self.stats["current_status_text"] = f"Anti-spam tanaffusi: {rest_sec}s dam olinmoqda..."
+                await broadcast_user_ws(self.user_id, "progress", {"stats": self.stats})
+                for _ in range(rest_sec):
+                    if self.status == "stopped" or not self.pause_event.is_set():
+                        break
+                    await asyncio.sleep(1)
+
             # Delay before next message if not last item
             if idx < len(to_process) - 1 and self.status == "running":
                 sleep_sec = random.randint(min(self.min_delay, self.max_delay), max(self.min_delay, self.max_delay))
@@ -526,6 +583,19 @@ class UserCampaignManager:
                     if self.status == "stopped" or not self.pause_event.is_set():
                         break
                     await asyncio.sleep(1)
+
+        # Avto-tozalash (Batch clean up contacts at the end)
+        if self.auto_clean_contacts and contacts_to_clean and client and tg_mgr.is_authorized:
+            try:
+                unique_ids = list(set(contacts_to_clean))
+                self.add_log("Tizim", "Tozalash", "info", f"Kontaktlar daftarchasi xavfsiz tozalanmoqda ({len(unique_ids)} ta)...")
+                for chunk_i in range(0, len(unique_ids), 50):
+                    chunk = unique_ids[chunk_i:chunk_i + 50]
+                    await client(DeleteContactsRequest(id=chunk))
+                    await asyncio.sleep(1)
+                self.add_log("Tizim", "Tozalash", "info", "Kontaktlar muvaffaqiyatli tozalandi.")
+            except Exception as del_err:
+                print(f"Kontaktlarni tozalashda xatolik: {del_err}")
 
         if self.status != "stopped":
             self.status = "completed"
@@ -1065,6 +1135,13 @@ async def handle_campaign_start(request):
     data = await request.json()
     contacts = data.get("contacts", [])
     message = data.get("message", "").strip()
+    messages = data.get("messages", [])
+    if not isinstance(messages, list):
+        messages = [message] if message else []
+    messages = [m.strip() for m in messages if isinstance(m, str) and m.strip()]
+    if not messages and message:
+        messages = [message]
+
     media_path = data.get("media_path")
     min_delay = int(data.get("min_delay", 15))
     max_delay = int(data.get("max_delay", 30))
@@ -1073,12 +1150,13 @@ async def handle_campaign_start(request):
 
     if not contacts:
         return web.json_response({"ok": False, "error": "Hech qanday kontakt tanlanmagan!"}, status=400)
-    if not message and not media_path:
+    if not messages and not media_path:
         return web.json_response({"ok": False, "error": "Xabar matni yoki rasm kiritilishi shart!"}, status=400)
 
     cmp_mgr.reset()
     cmp_mgr.contacts = contacts
-    cmp_mgr.message_template = message
+    cmp_mgr.message_template = messages[0] if messages else message
+    cmp_mgr.message_templates = messages
     cmp_mgr.media_path = media_path
     cmp_mgr.min_delay = min_delay
     cmp_mgr.max_delay = max_delay

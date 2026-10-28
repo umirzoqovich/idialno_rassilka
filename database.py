@@ -230,13 +230,13 @@ async def get_user_settings(user_id: int):
                 "api_id": "",
                 "api_hash": "",
                 "phone": "",
-                "min_delay": 15,
-                "max_delay": 30,
+                "min_delay": 30,
+                "max_delay": 60,
                 "auto_clean_contacts": True,
                 "max_limit": 0
             }
             await db.execute(
-                "INSERT INTO user_settings (user_id, min_delay, max_delay, auto_clean_contacts, max_limit) VALUES (?, 15, 30, 1, 0)",
+                "INSERT INTO user_settings (user_id, min_delay, max_delay, auto_clean_contacts, max_limit) VALUES (?, 30, 60, 1, 0)",
                 (user_id,)
             )
             await db.commit()

@@ -220,15 +220,56 @@
             </div>
           </div>
           <div class="card-body">
-            <!-- Dynamic tags -->
+            <!-- Dynamic tags & Spintax -->
             <div class="tag-bar">
               <span class="text-xs text-muted">Taglar:</span>
               <button type="button" class="tag-btn" onclick="insertTag('{ism}')">+ {ism}</button>
               <button type="button" class="tag-btn" onclick="insertTag('{telefon}')">+ {telefon}</button>
+              <button type="button" class="tag-btn tag-btn-spintax" onclick="insertTag('{Salom|Assalomu alaykum|Xayrli kun}')" title="Tasodifiy salomlashish">+ {Salom|Assalomu alaykum}</button>
+              <button type="button" class="tag-btn tag-btn-spintax" onclick="insertTag('{bizda yangilik bor|sizga taklifimiz bor|qiziq maʼlumot bor}')" title="Tasodifiy taklif">+ Spintax taklif</button>
+              <button type="button" class="tag-btn tag-btn-action" onclick="refreshSpintaxPreview()" title="Tasodifiy variantni qayta ko'rish">🎲 Namunani almashtirish</button>
             </div>
 
-            <div class="form-group mt-2">
-              <textarea id="message-text" rows="5" class="form-control" placeholder="Assalomu alaykum {ism}! Siz uchun ajoyib taklifimiz bor..." oninput="updateMessagePreview()"></textarea>
+            <div class="spintax-tip mt-2">
+              💡 <b>Anti-Spam Spintax:</b> <code>{Salom|Assalomu alaykum}</code> kabi yozsangiz, har bir mijozga tasodifiy so'z tanlanadi va Telegram bir xil matn deb hisoblab bloklamaydi!
+            </div>
+
+            <!-- Multi-Variant Tabs (Anti-Spam A/B/C Rotation) -->
+            <div class="variant-tabs-container mt-3">
+              <div class="variant-tabs-nav">
+                <button type="button" class="variant-tab-btn active" id="var-tab-1" onclick="switchVariantTab(1)">
+                  <span class="var-badge">1</span>
+                  <span>Variant 1</span>
+                  <span class="var-tag-status var-main">Asosiy</span>
+                </button>
+                <button type="button" class="variant-tab-btn" id="var-tab-2" onclick="switchVariantTab(2)">
+                  <span class="var-badge">2</span>
+                  <span>Variant 2</span>
+                  <span class="var-tag-status var-empty" id="var-status-2">Bo'sh</span>
+                </button>
+                <button type="button" class="variant-tab-btn" id="var-tab-3" onclick="switchVariantTab(3)">
+                  <span class="var-badge">3</span>
+                  <span>Variant 3</span>
+                  <span class="var-tag-status var-empty" id="var-status-3">Bo'sh</span>
+                </button>
+              </div>
+              <div class="variant-indicator-bar" id="variant-summary-bar">
+                <span class="pulse-indicator"></span>
+                <span id="variant-summary-text">1 ta variant faol (Variant 1)</span>
+              </div>
+            </div>
+
+            <!-- Variant Panes -->
+            <div class="variant-panes-wrapper mt-2">
+              <div class="variant-pane" id="pane-var-1">
+                <textarea id="message-text" rows="5" class="form-control" placeholder="Variant 1 (Asosiy): Assalomu alaykum {ism}! Siz uchun ajoyib taklifimiz bor..." oninput="onVariantInput(1)"></textarea>
+              </div>
+              <div class="variant-pane" id="pane-var-2" style="display: none;">
+                <textarea id="message-text-2" rows="5" class="form-control" placeholder="Variant 2 (Ixtiyoriy): Salom {ism}, qandaysiz? Bizda yangi mahsulotlar keldi..." oninput="onVariantInput(2)"></textarea>
+              </div>
+              <div class="variant-pane" id="pane-var-3" style="display: none;">
+                <textarea id="message-text-3" rows="5" class="form-control" placeholder="Variant 3 (Ixtiyoriy): Hurmatli {ism}, sizga maxsus chegirmamiz haqida xabar bermoqchimiz..." oninput="onVariantInput(3)"></textarea>
+              </div>
             </div>
 
             <!-- Optional Media Attachment -->
@@ -246,11 +287,26 @@
                 <span id="media-filename" class="text-xs text-muted">Rasm tanlanmagan</span>
                 <button id="media-remove-btn" class="btn btn-text text-danger hidden" onclick="removeMedia()">O'chirish</button>
               </div>
+
+              <!-- Media Anti-Spam warning -->
+              <div id="media-warning-box" class="media-warning-box mt-2 hidden">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="warning-icon">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                <div>
+                  <strong>Spam xavfi ogohlantirishi:</strong> Notanish odamlarga birinchi xabarda rasm yuborish shikoyat (Report Spam) tushishi va akkaunt bloklanish xavfini oshiradi. Imkon qadar faqat qisqa matn yuborish yoki oraliq vaqtni (delay) 45–90s qilib sozlash tavsiya etiladi.
+                </div>
+              </div>
             </div>
 
             <!-- Live message preview -->
             <div class="mt-3">
-              <label class="form-label text-xs">Mijoz ko'radigan ko'rinish (Namunaviy):</label>
+              <div class="preview-header-bar mb-1">
+                <label class="form-label text-xs mb-0">Mijoz ko'radigan ko'rinish (<span id="preview-variant-label">Variant 1</span>):</label>
+                <button type="button" class="btn-text-xs" onclick="cyclePreviewVariant()" title="Boshqa variantni ko'rish">Variantni almashtirish 🔄</button>
+              </div>
               <div class="tg-bubble" id="tg-preview-bubble">
                 <div class="tg-bubble-text" id="tg-preview-text">Xabar matni kiritilmadi...</div>
                 <div class="tg-bubble-time" id="preview-time">12:00</div>
@@ -272,11 +328,11 @@
             <div class="settings-grid">
               <div class="form-group">
                 <label class="form-label">Minimal kutilma (soniya):</label>
-                <input type="number" id="min-delay" class="form-control" value="15" min="5" max="120">
+                <input type="number" id="min-delay" class="form-control" value="30" min="5" max="120">
               </div>
               <div class="form-group">
                 <label class="form-label">Maksimal kutilma (soniya):</label>
-                <input type="number" id="max-delay" class="form-control" value="25" min="10" max="180">
+                <input type="number" id="max-delay" class="form-control" value="60" min="10" max="180">
               </div>
             </div>
 

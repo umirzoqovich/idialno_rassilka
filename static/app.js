@@ -1015,21 +1015,156 @@ function renderPreviewTable(rows) {
   });
 }
 
-// ----------------- Message Editor & Live Preview -----------------
+// ----------------- Message Editor & Multi-Variant Anti-Spam -----------------
+let currentActiveVariant = 1;
+let currentPreviewVariant = 1;
+
+function switchVariantTab(num) {
+  currentActiveVariant = num;
+  currentPreviewVariant = num;
+
+  for (let i = 1; i <= 3; i++) {
+    const tab = document.getElementById(`var-tab-${i}`);
+    const pane = document.getElementById(`pane-var-${i}`);
+    if (tab) tab.classList.toggle('active', i === num);
+    if (pane) pane.style.display = (i === num) ? 'block' : 'none';
+  }
+
+  const activeInput = getActiveVariantTextarea();
+  if (activeInput) activeInput.focus();
+
+  updateMessagePreview();
+}
+
+function getActiveVariantTextarea() {
+  if (currentActiveVariant === 1) return document.getElementById('message-text');
+  return document.getElementById(`message-text-${currentActiveVariant}`) || document.getElementById('message-text');
+}
+
+function onVariantInput(num) {
+  updateVariantStatusTags();
+  if (currentPreviewVariant === num) {
+    updateMessagePreview();
+  }
+}
+
+function updateVariantStatusTags() {
+  const v1 = (document.getElementById('message-text')?.value || '').trim();
+  const v2 = (document.getElementById('message-text-2')?.value || '').trim();
+  const v3 = (document.getElementById('message-text-3')?.value || '').trim();
+
+  const status2 = document.getElementById('var-status-2');
+  if (status2) {
+    if (v2) {
+      status2.textContent = "To'ldirildi";
+      status2.className = "var-tag-status var-filled";
+    } else {
+      status2.textContent = "Bo'sh";
+      status2.className = "var-tag-status var-empty";
+    }
+  }
+
+  const status3 = document.getElementById('var-status-3');
+  if (status3) {
+    if (v3) {
+      status3.textContent = "To'ldirildi";
+      status3.className = "var-tag-status var-filled";
+    } else {
+      status3.textContent = "Bo'sh";
+      status3.className = "var-tag-status var-empty";
+    }
+  }
+
+  let count = 0;
+  if (v1) count++;
+  if (v2) count++;
+  if (v3) count++;
+  if (count === 0) count = 1;
+
+  const summary = document.getElementById('variant-summary-text');
+  if (summary) {
+    if (count === 1) {
+      summary.textContent = "1 ta variant faol (Variant 1)";
+    } else {
+      summary.textContent = `${count} ta variant faol (Ketma-ket navbat bilan almashinadi)`;
+    }
+  }
+}
+
+function cyclePreviewVariant() {
+  const v1 = (document.getElementById('message-text')?.value || '').trim();
+  const v2 = (document.getElementById('message-text-2')?.value || '').trim();
+  const v3 = (document.getElementById('message-text-3')?.value || '').trim();
+
+  const filled = [];
+  if (v1) filled.push(1);
+  if (v2) filled.push(2);
+  if (v3) filled.push(3);
+  if (filled.length === 0) filled.push(1);
+
+  const curIdx = filled.indexOf(currentPreviewVariant);
+  const nextIdx = (curIdx + 1) % filled.length;
+  currentPreviewVariant = filled[nextIdx];
+
+  updateMessagePreview();
+  showToast(`Variant ${currentPreviewVariant} namunasi ko'rsatilmoqda`, 'info');
+}
+
 function insertTag(tag) {
-  const textarea = document.getElementById('message-text');
+  const textarea = getActiveVariantTextarea();
+  if (!textarea) return;
   const start = textarea.selectionStart;
   const end = textarea.selectionEnd;
   const text = textarea.value;
   textarea.value = text.substring(0, start) + tag + text.substring(end);
   textarea.focus();
   textarea.selectionStart = textarea.selectionEnd = start + tag.length;
+  onVariantInput(currentActiveVariant);
+}
+
+// Spintax generator for real-time live preview in UI
+function processSpintaxJs(text) {
+  if (!text) return '';
+  const pattern = /\{([^{}]+)\}/g;
+  let loops = 5;
+  while (loops > 0 && text.includes('{') && text.includes('|')) {
+    const newText = text.replace(pattern, (match, content) => {
+      if (content.includes('|')) {
+        const options = content.split('|');
+        const chosen = options[Math.floor(Math.random() * options.length)];
+        return chosen.trim();
+      }
+      return match;
+    });
+    if (newText === text) break;
+    text = newText;
+    loops--;
+  }
+  return text;
+}
+
+function refreshSpintaxPreview() {
   updateMessagePreview();
+  showToast("Tasodifiy Spintax varianti yangilandi!", "info");
 }
 
 function updateMessagePreview() {
-  const text = document.getElementById('message-text').value;
-  const previewText = document.getElementById('preview-message-text');
+  let text = "";
+  if (currentPreviewVariant === 1) {
+    text = document.getElementById('message-text')?.value || "";
+  } else if (currentPreviewVariant === 2) {
+    text = document.getElementById('message-text-2')?.value || "";
+  } else if (currentPreviewVariant === 3) {
+    text = document.getElementById('message-text-3')?.value || "";
+  }
+
+  const label = document.getElementById('preview-variant-label');
+  if (label) {
+    label.textContent = `Variant ${currentPreviewVariant}`;
+  }
+
+  const previewText = document.getElementById('tg-preview-text') || document.getElementById('preview-message-text');
+  if (!previewText) return;
 
   let sampleName = "Ali";
   let samplePhone = "+998 90 123 45 67";
@@ -1046,8 +1181,11 @@ function updateMessagePreview() {
     .replace(/{telefon}/g, samplePhone)
     .replace(/{phone}/g, samplePhone);
 
+  // Spintax tasodifiy variantini ko'rsatish
+  rendered = processSpintaxJs(rendered);
+
   if (rendered.trim() === '') {
-    previewText.textContent = "Xabar matni bu yerda ko'rinadi...";
+    previewText.textContent = `Variant ${currentPreviewVariant} matni bu yerda ko'rinadi...`;
   } else {
     previewText.textContent = rendered;
   }
@@ -1079,7 +1217,8 @@ function handleMediaSelect(e) {
 
     document.getElementById('media-filename').textContent = `Rasm biriktirildi: ${file.name}`;
     document.getElementById('media-remove-btn').classList.remove('hidden');
-    showToast('Rasm muvaffaqiyatli yuklandi', 'success');
+    document.getElementById('media-warning-box')?.classList.remove('hidden');
+    showToast('Rasm biriktirildi. Ogohlantirishni o\'qing!', 'info');
   })
   .catch(err => {
     document.getElementById('media-filename').textContent = "Rasm tanlanmagan";
@@ -1093,6 +1232,7 @@ function removeMedia() {
   document.getElementById('media-input').value = '';
   document.getElementById('media-filename').textContent = "Rasm tanlanmagan";
   document.getElementById('media-remove-btn').classList.add('hidden');
+  document.getElementById('media-warning-box')?.classList.add('hidden');
 }
 
 // ----------------- Campaign Controls -----------------
@@ -1113,9 +1253,17 @@ async function startCampaign() {
     return;
   }
 
-  const message = document.getElementById('message-text').value.trim();
-  if (!message && !appState.media.filePath) {
-    showToast("Xabar matni yoki rasm kiritilishi shart!", "error");
+  const var1 = (document.getElementById('message-text')?.value || '').trim();
+  const var2 = (document.getElementById('message-text-2')?.value || '').trim();
+  const var3 = (document.getElementById('message-text-3')?.value || '').trim();
+
+  const messages = [];
+  if (var1) messages.push(var1);
+  if (var2) messages.push(var2);
+  if (var3) messages.push(var3);
+
+  if (messages.length === 0 && !appState.media.filePath) {
+    showToast("Kamida 1 ta xabar matni yoki rasm kiritilishi shart!", "error");
     return;
   }
 
@@ -1133,7 +1281,8 @@ async function startCampaign() {
 
   const payload = {
     contacts: appState.excel.contacts,
-    message: message,
+    message: messages[0] || "",
+    messages: messages,
     media_path: appState.media.filePath,
     min_delay: minDelay,
     max_delay: maxDelay,
